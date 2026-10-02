@@ -5,25 +5,24 @@
 
 ## Рабочая архитектура
 
-```text
-Telegram ←→ приватная функция Yandex Cloud ttar-webhook
-                    ↓ updates                  ↑ ответы / запрос фото
-                Yandex Message Queue ←→ worker на ilya-grid-vm
-                                            ↓ фото
-                                    изолированный Codex CLI
-                                            ↓ JSON
-                                    SQLite / черновик / Elo
+```mermaid
+flowchart LR
+  TG[Telegram] --> GW[Yandex API Gateway]
+  GW --> CF[Приватная Cloud Function]
+  CF --> Q[Yandex Message Queue]
+  Q --> W[Worker на ilya-grid-vm]
+  W --> OCR[Codex OCR]
+  W --> DB[(SQLite)]
+  W --> CF
+  CF --> TG
 ```
 
-Функция сама вызывает Telegram getUpdates по таймеру раз в минуту. Приём
-подтверждается Telegram только после сохранения полного пакета в очереди.
-Worker самостоятельно читает очередь. Фото он скачивает через функцию;
-проверку администраторов и ответы выполняет через неё же. **На ilya-grid-vm
-нет Telegram-токена, worker не обращается к Telegram API.** VM обращается к
-YMQ, IAM и приватной функции, а отдельный процесс Codex — к OpenAI.
-
-Mac, SSH-сессия, открытый Codex и локальные туннели после установки не нужны.
-Обычно получение update занимает до минуты, далее добавляется время Codex.
+Telegram доставляет updates через API Gateway; функция проверяет webhook secret
+и сохраняет их в YMQ до ответа. Нажатие получает answerCallbackQuery прямо в
+HTTP-ответе webhook. Worker считает голоса и обновляет то же сообщение через
+приватную функцию. OCR выполняется отдельно от обработки кнопок и отправки outbox.
+На VM нет Telegram-токена и прямых обращений к Telegram: весь сетевой обмен с
+Telegram выполняется в облаке. Mac, локальные туннели и открытая сессия не нужны.
 
 ## Развёрнуто 2 октября 2026
 
@@ -36,16 +35,19 @@ Mac, SSH-сессия, открытый Codex и локальные туннел
 - Каталог `tt-rating`: `b1g5bco1nvs09aeph4sb`.
 - Функция `ttar-webhook`: `d4ekmj80j8457c3lsoa1`, Python 3.12, 256 MiB,
   timeout 60 s, без prepared instances, 1 instance / 2 requests на зону.
-- Таймер `ttar-telegram-poll`: `a1s22ofbe04lc2b84336`, раз в минуту.
+- API Gateway `ttar-telegram` принимает webhook. Резервный минутный таймер
+  `ttar-telegram-poll`: `a1s22ofbe04lc2b84336`, при webhook приостановлен.
 - Очереди `ttar-updates` и `ttar-dead-letters`: 14 дней хранения.
 - Два service account и Lockbox secret `ttar-webhook-secrets`.
 - `tg-vk-*` не изменялись. Новая VM не создавалась.
-- 71 тест прошёл локально и на VM, включая подпись IAM JWT, облачный транспорт,
+- 76 тестов проверяют IAM JWT, облачный транспорт, webhook ACK, кнопки во время
+  OCR, два разных голоса, повторы и обновление счётчика,
   ограничение методов/чата и проверку целостности фото при передаче частями.
 - Реальное фото (Telegram message 16) прошло облако → очередь → worker → Codex →
   черновик №1 → облако → Telegram. Job done, outbox sent, pending Telegram 0.
   В первоначальном черновике 24 предварительные строки из двух блоков. Новые
-  правила OCR учитывают порядок и словарь владельца; подтверждено 0 партий.
+  правила OCR учитывают порядок и словарь владельца; партии добавляются после
+  двух разных подтверждений.
 - Проверено отсутствие Telegram-токена в runtime credential VM; проверка прав
   администратора через приватную облачную функцию успешна. Свежий backup выполнен.
 - Реальный Codex через OCR socket проверен на синтетической доске с четырьмя
@@ -66,8 +68,9 @@ Mac, SSH-сессия, открытый Codex и локальные туннел
 гарантия Telegram. Если маршрут изменится, следует повторить безопасный probe
 и обновить только эту переменную. Probe временно приостанавливает наш таймер
 и заменяет latest-версию диагностикой; после него обязательно выполнить
-`enable_cloud_only.py`. Старые Telegram webhook и Cloud poller без IPv4
-не используются. Pending updates при переходе не удалялись.
+`enable_cloud_only.py`. Для публичного webhook используется API Gateway;
+прямой webhook на hostname Cloud Functions не используется. Pending updates
+при переходе не удаляются.
 
 ## Доступы и обновление
 
@@ -83,7 +86,7 @@ runtime-каталог. IAM-токен функция-вызова worker пол
 Codex не получает этих ключей, Telegram-токена, доступа к БД и конфигурации.
 Личные конфигурации yc и Codex с Mac на сервер не копируются.
 
-Cloud adapter разрешает sendMessage, answerCallbackQuery, getChatMember и
+Cloud adapter разрешает sendMessage, editMessageText, answerCallbackQuery, getChatMember и
 скачивание фото. sendMessage/getChatMember ограничены разрешённой группой.
 Фото до 20 MiB передаётся частями по 1 MiB с проверкой общей длины и SHA-256,
 чтобы не превышать лимит JSON Cloud Functions 3.5 MB. Function logging выключен.
@@ -97,8 +100,20 @@ cd /Users/ilya-grid/tt-rating-bot
 ```
 
 Скрипт проверяет нового бота и отсутствие чужого webhook, обновляет существующую
-функцию, устанавливает необходимые credentials через stdin SSH, затем включает
-наш таймер. `deploy_cloud.py` — первоначальное создание ресурсов, он блокирует
+функцию, устанавливает необходимые credentials через stdin SSH. При действующем
+webhook сохраняет его и оставляет резервный таймер приостановленным; иначе включает
+таймер. Для первого перехода с опроса на webhook после обновления функции:
+
+```bash
+.venv/bin/python scripts/enable_gateway_webhook.py
+```
+
+Скрипт создаёт/обновляет только наш API Gateway, проверяет secret и фильтр чата,
+приостанавливает наш таймер и включает webhook без удаления pending updates.
+При неудаче установки пытается восстановить минутный опрос. Публичный HTTP route
+принимает только Telegram updates и не открывает доступ к приватному relay.
+
+`deploy_cloud.py` — первоначальное создание ресурсов, он блокирует
 повторный переход текущей схемы к прямой связи VM с Telegram.
 Метаданные — `.deploy-state.json`; приватные локальные установочные файлы —
 `~/.config/ttar/` (0600), вне Git.
@@ -174,7 +189,7 @@ ssh -t ilya-grid-vm "sudo -u ttar-ocr env HOME=/var/lib/ttar-ocr CODEX_HOME=/var
 
 ## Надёжность
 
-Облачный poller подтверждает пакет через Telegram offset только после сохранения всех его updates в YMQ. При сбое очереди offset не сдвигается; повтор безопасен. На VM job сначала фиксируется SQLite FULL/WAL, затем удаляется из YMQ. Очередь хранит сообщения 14 дней; poison message после 5 доставок уходит в DLQ. Worker имеет один processor (flock), отдельный приёмник, максимум 3 попытки распознавания, timeout Codex 180 s, backoff 20/40 секунд. При рестарте `processing` возвращаются в `pending`.
+Webhook отвечает после сохранения update в YMQ. Резервный облачный poller подтверждает пакет через Telegram offset только после сохранения всех его updates в YMQ. При сбое очереди offset не сдвигается; повтор безопасен. На VM job сначала фиксируется SQLite FULL/WAL, затем удаляется из YMQ. Очередь хранит сообщения 14 дней; poison message после 5 доставок уходит в DLQ. Worker имеет один процесс (flock), отдельные потоки приёма, OCR и обработки команд. Outbox отправляет только поток команд. Максимум 3 попытки распознавания, timeout Codex 180 s, backoff 20/40 секунд. При рестарте `processing` возвращаются в `pending`.
 
 Отдельный Unix socket связывает worker и recognizer. Пользователи сервисов различаются, рабочая БД и ключи недоступны recognizer. shell, apps, hooks, plugins, web search, multi-agent и code mode выключены для `codex exec`; sandbox read-only, конфигурация пользователя не загружается. Неожиданный tool event отклоняет результат. Текст фотографии и любые попытки инструкций на ней рассматриваются как данные.
 

@@ -161,6 +161,7 @@ class Bot:
                 self.store.db.execute("UPDATE jobs SET status='done' WHERE id=?", (job['id'],))
             return
         callback = update.get('callback_query')
+        cloud_ack = update.get('_cloud_callback_acknowledged', False)
         message = callback.get('message', {}) if callback else update.get('message', {})
         actor = (callback or message).get('from', {}).get('id', 0)
         text = message.get('text', '') if not callback else ''
@@ -199,7 +200,8 @@ class Bot:
                 if stats_callback:
                     window = callback['data'].split(':')[-1]
                     response, keyboard = statistics(self.store, parse_window(window))
-                    self.store.send(f"callback:{job['id']}", 'answerCallbackQuery', {'callback_query_id': callback['id']})
+                    if not cloud_ack:
+                        self.store.send(f"callback:{job['id']}", 'answerCallbackQuery', {'callback_query_id': callback['id']})
                 elif callback:
                     match = re.fullmatch(r'confirm:(\d+):(\d+)', callback.get('data', ''))
                     if not match:
@@ -210,8 +212,9 @@ class Bot:
                         self.store.register_card(pid, revision, self.allowed_chat, message['message_id'], 'text')
                     self.store.update_cards(pid, f"vote:{job['id']}")
                     status, _ = draft_footer(self.store, pid)
-                    self.store.send(f"callback:{job['id']}", 'answerCallbackQuery',
-                                    {'callback_query_id': callback['id'], 'text': status.splitlines()[0]})
+                    if not cloud_ack:
+                        self.store.send(f"callback:{job['id']}", 'answerCallbackQuery',
+                                        {'callback_query_id': callback['id'], 'text': status.splitlines()[0]})
                     response = None
                 elif message.get('photo'):
                     if old:
@@ -229,8 +232,9 @@ class Bot:
             except (ValueError, IndexError) as error:
                 response, keyboard = str(error), None
                 if callback:
-                    self.store.send(f"callback:{job['id']}", 'answerCallbackQuery', {'callback_query_id': callback['id'], 'text': response[:190], 'show_alert': True})
-                    response = None
+                    if not cloud_ack:
+                        self.store.send(f"callback:{job['id']}", 'answerCallbackQuery', {'callback_query_id': callback['id'], 'text': response[:190], 'show_alert': True})
+                        response = None
             # Save mutation + outbox + completion atomically. Telegram retries cannot repeat a mutation.
             parts = split_message(response) if response is not None else []
             for i, part in enumerate(parts):

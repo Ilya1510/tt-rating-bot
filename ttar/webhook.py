@@ -75,6 +75,25 @@ def accept_trigger(update, chat_id, publish, accept_from=0):
     return response
 
 
+def accept_gateway(event, secret, chat_id, publish, accept_from=0):
+    callback_id = None
+    def persist(body):
+        nonlocal callback_id
+        update = json.loads(body)
+        callback_id = update.get('callback_query', {}).get('id')
+        if callback_id:
+            update['_cloud_callback_acknowledged'] = True
+        publish(json.dumps(update, ensure_ascii=False))
+    response = accept(event, secret, chat_id, persist, accept_from)
+    if response['statusCode'] == 200 and callback_id:
+        # Telegram executes this Bot API method from the webhook response.
+        # Reply only after the update is durably in YMQ, without another HTTP call.
+        response.update(headers={'Content-Type': 'application/json'}, body=json.dumps({
+            'method': 'answerCallbackQuery', 'callback_query_id': callback_id,
+            'text': 'Обрабатываю…', 'cache_time': 0}, ensure_ascii=False))
+    return response
+
+
 def poll_updates(call, publish, chat_id, accept_from=0, max_batches=3):
     """Acknowledge Telegram only after the complete batch is durably in YMQ.
 
@@ -171,6 +190,15 @@ def cloud_handler(event, context):
     # integration=raw sends request bytes rather than an HTTP envelope.
     if isinstance(event, (bytes, str)):
         event = json.loads(event)
+    if 'httpMethod' in event:
+        # The public gateway supplies an HTTP envelope; authenticate it before
+        # considering any body fields. The relay remains IAM-only.
+        def publish(body):
+            client = boto3.client('sqs', endpoint_url='https://message-queue.api.cloud.yandex.net',
+                region_name='ru-central1', config=Config(connect_timeout=2, read_timeout=3, retries={'max_attempts': 1}))
+            client.send_message(QueueUrl=os.environ['QUEUE_URL'], MessageBody=body)
+        return accept_gateway(event, os.environ.get('WEBHOOK_SECRET', ''), chat_id, publish,
+                              int(os.environ.get('ACCEPT_FROM', '0')))
     if 'telegram_action' in event:
         return relay_action(event, telegram, chat_id)
     client = boto3.client('sqs', endpoint_url='https://message-queue.api.cloud.yandex.net',

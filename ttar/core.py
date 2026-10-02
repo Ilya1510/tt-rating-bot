@@ -310,13 +310,16 @@ class Store:
                             (update['update_id'], json.dumps(update, ensure_ascii=False)))
 
     def recover(self):
-        # One processor per DB, protected by an OS flock in the worker.
+        # One worker process per DB, protected by an OS flock.
         with self.transaction():
             self.db.execute("UPDATE jobs SET status='pending' WHERE status='processing'")
 
-    def claim(self):
+    def claim(self, photos=None):
         with self.transaction():
-            row = self.db.execute("SELECT * FROM jobs WHERE status='pending' AND ready_at<=? ORDER BY id LIMIT 1", (time.time(),)).fetchone()
+            photo_filter = '' if photos is None else (
+                " AND json_extract(payload,'$.message.photo') IS NOT NULL" if photos else
+                " AND json_extract(payload,'$.message.photo') IS NULL")
+            row = self.db.execute("SELECT * FROM jobs WHERE status='pending' AND ready_at<=?" + photo_filter + " ORDER BY id LIMIT 1", (time.time(),)).fetchone()
             if row:
                 self.db.execute("UPDATE jobs SET status='processing',attempts=attempts+1 WHERE id=?", (row['id'],))
                 return dict(self.db.execute('SELECT * FROM jobs WHERE id=?', (row['id'],)).fetchone())

@@ -18,7 +18,9 @@ def main():
     telegram = Telegram(token, '149.154.167.220')
     if telegram.call('getMe').get('username') != 'tt_chatgpt_rating_bot':
         raise RuntimeError('Wrong Telegram bot; no cloud changes made')
-    if telegram.call('getWebhookInfo').get('url'):
+    webhook_url = telegram.call('getWebhookInfo').get('url', '')
+    gateway_active = bool(state.get('gateway_url') and webhook_url == state['gateway_url'])
+    if webhook_url and not gateway_active:
         raise RuntimeError('Unexpected active webhook; no cloud changes made')
     creds = json.loads((PRIVATE/'cloud-secrets.json').read_text())
     function, producer, consumer = state['function_id'], state['producer_id'], state['consumer_id']
@@ -48,7 +50,7 @@ def main():
                '--execution-timeout', '60s', '--service-account-id', producer,
                '--source-path', str(source), '--no-logging', '--environment',
                f"ALLOWED_CHAT_ID={state['allowed_chat_id']},QUEUE_URL={state['queue_url']},ACCEPT_FROM={state['accept_from']},TG_IPV4_ADDRESS=149.154.167.220"]
-        for name in ('AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'TG_TOKEN'):
+        for name in ('AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'TG_TOKEN', 'WEBHOOK_SECRET'):
             cmd += ['--secret', f"environment-variable={name},id={state['secret_id']},version-id={state['poll_secret_version_id']},key={name}"]
         state['function_version_id'] = yc(*cmd)['id']
         state['cloud_only_version_id'] = state['function_version_id']
@@ -66,19 +68,19 @@ def main():
                          input=json.dumps(data).encode(), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if run.returncode:
         raise RuntimeError('VM cloud transport configuration failed; raw output withheld')
-    state['ingress_mode'] = 'cloud_only'
+    state['ingress_mode'] = 'cloud_gateway' if gateway_active else 'cloud_only'
     state['telegram_cloud_url'] = endpoint
     state['telegram_on_vm'] = False
-    state['webhook_configured'] = False
+    state['webhook_configured'] = gateway_active
     save(STATE, state)
     # Resume only after the worker has no Telegram credential or direct API client.
-    yc('serverless', 'trigger', 'resume', state['poll_timer_id'])
-    state['poll_timer_paused'] = False
+    yc('serverless', 'trigger', 'pause' if gateway_active else 'resume', state['poll_timer_id'])
+    state['poll_timer_paused'] = gateway_active
     save(STATE, state)
     telegram.call('setMyCommands', commands=[
         {'command': 'confirm', 'description': 'Подтвердить последний список партий'},
         {'command': 'stat', 'description': 'Последние N партий, по умолчанию 1000'}])
-    print(json.dumps({'mode': 'cloud_only', 'function_id': function,
+    print(json.dumps({'mode': state['ingress_mode'], 'function_id': function,
                       'timer_id': state['poll_timer_id'], 'telegram_on_vm': False}))
 
 

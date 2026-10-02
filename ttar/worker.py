@@ -80,6 +80,37 @@ def flush_outbox(store, telegram):
     return True
 
 
+def process_job(store, bot, job, chat_id):
+    try:
+        bot.handle(job)
+        LOG.info('Job %s complete', job['id'])
+    except Exception as error:
+        store.retry(job['id'], type(error).__name__)
+        LOG.warning('Job %s failed attempt %s: %s', job['id'], job['attempts'], type(error).__name__)
+        if job['attempts'] >= 3:
+            with store.transaction():
+                store.send(f"failure:{job['id']}", 'sendMessage', {
+                    'chat_id': chat_id,
+                    'text': f"Не удалось обработать update #{job['id']} после 3 попыток. Рейтинг не изменён. Администратор может проверить журнал и повторить задание."})
+
+
+def process_photos(config, credentials):
+    # Separate SQLite connection and cloud adapter; only the main thread sends
+    # the outbox, so concurrent OCR cannot duplicate or hold up card updates.
+    store = Store(config['database'])
+    telegram = CloudTelegram(config['telegram_cloud_url'], credentials['cloud_function_key'])
+    bot = Bot(store, telegram, lambda data: remote_recognize(data, config['recognizer_socket']), config['allowed_chat_id'])
+    try:
+        while not STOP.is_set():
+            job = store.claim(photos=True)
+            if job:
+                process_job(store, bot, job, config['allowed_chat_id'])
+            else:
+                STOP.wait(.2)
+    finally:
+        store.db.close()
+
+
 def main():
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
     config = json.loads(Path(os.environ.get('TTAR_CONFIG', '/etc/ttar/config.json')).read_text())
@@ -103,23 +134,16 @@ def main():
     bot = Bot(store, telegram, lambda data: remote_recognize(data, config['recognizer_socket']), config['allowed_chat_id'])
     thread = threading.Thread(target=receive, args=(config, credentials), daemon=True)
     thread.start()
+    photos = threading.Thread(target=process_photos, args=(config, credentials))
+    photos.start()
     LOG.info('Worker started, rating unit=%s; confirmations required', store.setting('unit'))
     while not STOP.is_set():
-        job = store.claim()
+        job = store.claim(photos=False)
         if job:
-            try:
-                bot.handle(job)
-                LOG.info('Job %s complete', job['id'])
-            except Exception as error:
-                store.retry(job['id'], type(error).__name__)
-                LOG.warning('Job %s failed attempt %s: %s', job['id'], job['attempts'], type(error).__name__)
-                if job['attempts'] >= 3:
-                    with store.transaction():
-                        store.send(f"failure:{job['id']}", 'sendMessage', {
-                            'chat_id': config['allowed_chat_id'],
-                            'text': f"Не удалось обработать update #{job['id']} после 3 попыток. Рейтинг не изменён. Администратор может проверить журнал и повторить задание."})
+            process_job(store, bot, job, config['allowed_chat_id'])
         if not flush_outbox(store, telegram) and not job:
-            STOP.wait(1)
+            STOP.wait(.2)
+    photos.join()  # Let an in-flight OCR finish before releasing the worker lock.
     thread.join(timeout=35)
     store.db.close()
     lock.close()
