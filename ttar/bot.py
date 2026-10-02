@@ -29,18 +29,16 @@ def draft_footer(store, pid):
     photo = store.photo(pid)
     games = json.loads(photo['proposal'])
     votes = store.vote_count(pid)
-    buttons = []
+    buttons = [[{'text': f'Подтвердить · {votes}/2',
+                 'callback_data': f"confirm:{pid}:{photo['revision']}"}]]
     if photo['status'] == 'confirmed':
         text = f'Учтено партий: {len(games)}.'
         if votes:
             text += f' Подтвердили: {votes}/2.'
-    elif json.loads(photo['ambiguities']):
-        text = 'Не все партии читаются однозначно. Пришли фото чётче.'
-    elif games:
-        text = f'Подтвердили: {votes}/2.\nЕсли всё верно, нажми «Подтвердить» ниже. Нужны 2 разных участника.'
-        buttons.append([{'text': f'Подтвердить · {votes}/2', 'callback_data': f"confirm:{pid}:{photo['revision']}"}])
     else:
-        text = 'Завершённых партий на фото не нашёл.'
+        text = f'Подтвердили: {votes}/2.\nЕсли всё верно, нажми «Подтвердить» ниже. Нужны 2 разных участника.'
+        if not games:
+            text = 'Завершённых партий на фото не нашёл.\n\n' + text
     buttons.extend(stats_button(store)['inline_keyboard'])
     return text, {'inline_keyboard': buttons}
 

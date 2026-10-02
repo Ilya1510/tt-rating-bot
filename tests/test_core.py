@@ -60,13 +60,12 @@ def test_photo_dedup_by_unique_and_hash(store):
         assert (duplicate, is_new) == (p, False)
 
 
-def test_ambiguity_requires_manual_selection_and_stale_button_rejected(store):
+def test_ambiguity_allows_voting_and_stale_button_rejected(store):
     with store.transaction():
         data = raw(multi=True)
         data['ambiguities'] = ['Нечитаемый цвет пары']
         p = photo(store, data=data)
-        with pytest.raises(ValueError, match='неоднозначности'):
-            approve(store,p, 1,42,True)
+        assert not store.confirm(p, 1, 42, True)
         store.fix_draft(p, [['М', 'И', 11, 8]], 42, False)
         with pytest.raises(ValueError, match='изменился'):
             approve(store,p, 1,42,True)

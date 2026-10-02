@@ -247,11 +247,7 @@ class Store:
             raise ValueError('Черновик изменился; нажми кнопку под последним списком.')
         if self.setting('configured') != 'true':
             raise ValueError('Модель рейтинга ещё не настроена')
-        if json.loads(p['ambiguities']):
-            raise ValueError('Есть неоднозначности. Пришли фото чётче.')
         proposal = json.loads(p['proposal'])
-        if not proposal:
-            raise ValueError('Нет подтверждаемых партий')
         vote = self.db.execute('INSERT OR IGNORE INTO confirm_votes VALUES (?,?,?,?)', (pid, revision, actor, time.time()))
         if vote.rowcount:
             self.log(actor, 'confirm_vote', str(pid), None, {'revision': revision, 'votes': self.vote_count(pid, revision)})

@@ -7,7 +7,7 @@ from ttar.bot import Bot, card_update, draft_footer, draft_pages, queue_draft
 from ttar.core import Store
 from ttar.telegram import TelegramError, human_member
 from ttar.worker import flush_outbox
-from test_core import photo, store
+from test_core import raw, photo, store, approve
 from test_bot_webhook import FakeTelegram
 
 
@@ -65,7 +65,7 @@ def test_card_count_updates_in_place_and_callback_does_not_spam(store):
     pid = photo(store)
     store.register_card(pid, 1, -123, 55, 'text')
     bot = Bot(store, FakeTelegram(), None, -123)
-    for update_id, actor, expected in [(1,42,1),(2,42,1),(3,43,2)]:
+    for update_id, actor, expected in [(1,42,1),(2,42,1),(3,43,2),(4,42,2)]:
         update={'update_id':update_id,'callback_query':{'id':str(update_id),'from':{'id':actor},
                 'data':f'confirm:{pid}:1','message':{'message_id':55,'chat':{'id':-123},'text':'draft'}}}
         store.ingest(update)
@@ -77,9 +77,10 @@ def test_card_count_updates_in_place_and_callback_does_not_spam(store):
             assert markup['inline_keyboard'][0][0]['text'] == 'Подтвердить · 1/2'
         else:
             assert 'Учтено партий: 1.' in text
-            assert all(not button['callback_data'].startswith('confirm:') for row in markup['inline_keyboard'] for button in row)
+            assert markup['inline_keyboard'][0][0]['text'] == 'Подтвердить · 2/2'
     assert store.db.execute("SELECT count(*) FROM outbox WHERE method='sendMessage'").fetchone()[0] == 0
-    assert store.db.execute("SELECT count(*) FROM outbox WHERE method='updateDraftCard'").fetchone()[0] == 3
+    assert store.db.execute("SELECT count(*) FROM outbox WHERE method='updateDraftCard'").fetchone()[0] == 4
+    assert store.db.execute('SELECT count(*) FROM games').fetchone()[0] == 1
 
 
 def test_plain_confirm_allows_second_member_and_refreshes_card(store):
@@ -114,7 +115,7 @@ def test_outbox_retry_uses_current_count_and_registers_returned_message(store):
     method,payload=tg.calls[-1]
     assert method == 'editMessageText' and '2/2' in payload['text']
     assert 'Учтено партий: 1.' in payload['text']
-    assert all(not b['callback_data'].startswith('confirm:') for row in payload['reply_markup']['inline_keyboard'] for b in row)
+    assert payload['reply_markup']['inline_keyboard'][0][0]['text'] == 'Подтвердить · 2/2'
 
 
 def test_old_card_never_confirms_an_unreviewed_revision(store):
@@ -166,3 +167,40 @@ def test_counter_changes_never_move_games_between_messages(store):
         after,_=draft_pages(store,pid)
         assert len(before)==len(after)
         assert [page.split('\n\n')[0] for page in before]==[page.split('\n\n')[0] for page in after]
+
+
+@pytest.mark.parametrize('order_known', [True, False])
+def test_ocr_notes_do_not_hide_button_or_block_confirming_visible_games(store, order_known):
+    data=raw()
+    data['ambiguities']=['Один счёт неясен', 'Пометки над заголовком']
+    data['order_known']=order_known
+    data['blocks'][0]['rows'].append(dict(data['blocks'][0]['rows'][0],kind='uncertain',score_a=None,score_b=13))
+    pid=photo(store,data=data)
+    pages,keyboard=draft_pages(store,pid)
+    assert 'неоднозначно' not in pages[-1] and 'фото чётче' not in pages[-1]
+    assert keyboard['inline_keyboard'][0][0]['text']=='Подтвердить · 0/2'
+    assert len(json.loads(store.photo(pid)['proposal']))==1
+    assert not store.confirm(pid,1,42,True)
+    assert store.db.execute('SELECT count(*) FROM games').fetchone()[0]==0
+    assert draft_footer(store,pid)[1]['inline_keyboard'][0][0]['text']=='Подтвердить · 1/2'
+    assert store.confirm(pid,1,43,True)
+    assert store.db.execute('SELECT count(*) FROM games').fetchone()[0]==1
+    assert json.loads(store.photo(pid)['ambiguities'])  # retain recognition notes for maintenance
+    assert draft_footer(store,pid)[1]['inline_keyboard'][0][0]['text']=='Подтвердить · 2/2'
+
+
+def test_empty_draft_has_button_and_confirmation_does_not_change_history(store):
+    recorded=photo(store)
+    approve(store,recorded,1)
+    ratings_before=[tuple(row) for row in store.db.execute('SELECT * FROM ratings ORDER BY player_id')]
+    data=raw()
+    data['blocks']=[]
+    data['ambiguities']=['Нет читаемого счёта']
+    pid=photo(store,unique='empty',data=data)
+    _,keyboard=draft_pages(store,pid)
+    assert keyboard['inline_keyboard'][0][0]['text']=='Подтвердить · 0/2'
+    assert not store.confirm(pid,1,42,True)
+    assert store.confirm(pid,1,43,True)
+    assert store.photo(pid)['status']=='confirmed'
+    assert store.db.execute('SELECT count(*) FROM games').fetchone()[0]==1
+    assert [tuple(row) for row in store.db.execute('SELECT * FROM ratings ORDER BY player_id')]==ratings_before
