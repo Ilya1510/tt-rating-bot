@@ -1,0 +1,15 @@
+[Unit]
+Description=TTAR consistent SQLite backup
+
+[Service]
+Type=oneshot
+User=ttar
+Group=ttar
+WorkingDirectory=/opt/ttar
+ExecStart=/opt/ttar/.venv/bin/python /opt/ttar/scripts/backup.py
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/ttar /var/backups/ttar

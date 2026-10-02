@@ -1,0 +1,33 @@
+[Unit]
+Description=TTAR durable Telegram queue worker
+After=network-online.target ttar-ocr.service
+Wants=network-online.target ttar-ocr.service
+
+[Service]
+Type=simple
+User=ttar
+Group=ttar
+SupplementaryGroups=ttar-ocr
+WorkingDirectory=/opt/ttar
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/ttar/.venv/bin/python -m ttar.worker
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=230
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+CapabilityBoundingSet=
+MemoryMax=512M
+CPUQuota=100%
+ReadWritePaths=/var/lib/ttar
+InaccessiblePaths=/var/lib/ttar-ocr
+
+[Install]
+WantedBy=multi-user.target

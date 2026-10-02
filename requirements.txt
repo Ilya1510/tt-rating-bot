@@ -1,0 +1,4 @@
+boto3==1.43.107
+jsonschema==4.26.0
+Pillow==12.3.0
+cryptography==48.0.1

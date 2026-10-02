@@ -1,0 +1,37 @@
+[Unit]
+Description=TTAR isolated Codex image recognition
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ttar-ocr
+Group=ttar-ocr
+WorkingDirectory=/var/lib/ttar-ocr
+Environment=PYTHONUNBUFFERED=1
+Environment=HOME=/var/lib/ttar-ocr
+Environment=CODEX_HOME=/var/lib/ttar-ocr/.codex
+Environment=PYTHONPATH=/opt/ttar
+ExecStart=/opt/ttar/.venv/bin/python -m ttar.recognizer
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=200
+RuntimeDirectory=ttar-ocr
+RuntimeDirectoryMode=0750
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+CapabilityBoundingSet=
+MemoryMax=1G
+CPUQuota=100%
+ReadWritePaths=/var/lib/ttar-ocr
+InaccessiblePaths=/var/lib/ttar /etc/ttar /var/backups/ttar /etc/credstore.encrypted
+
+[Install]
+WantedBy=multi-user.target
