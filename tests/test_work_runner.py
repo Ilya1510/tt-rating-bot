@@ -184,3 +184,41 @@ def test_pipeline_tests_before_push_before_deploy(tmp_path, monkeypatch, test_fa
     if not test_fails:
         assert result['commit']
         assert (release/'work-30-deploy.json').exists()
+
+
+def test_question_uses_readonly_snapshot_and_never_tests_pushes_or_deploys(tmp_path, monkeypatch):
+    release, home = tmp_path/'release', tmp_path/'code'
+    release.mkdir(); home.mkdir()
+    repo = release/'repo'
+    base = init_repo(repo)
+    work.git(repo, 'update-ref', 'refs/remotes/origin/main', base)
+    real_command, real_git = work.command, work.git
+    calls = []
+    def fake_command(argv, **kwargs):
+        if argv[0] == 'runuser' and 'exec' in argv:
+            calls.append('answer')
+            assert argv[argv.index('--sandbox') + 1] == 'read-only'
+            context = home/'contexts'/'31'/'tennis.json'
+            assert json.loads(context.read_text()) == {'players': [{'name': 'Илья', 'elo': 950}]}
+            assert context.stat().st_mode & 0o222 == 0
+            assert not (home/'jobs'/'31'/'tennis.json').exists()
+            Path(argv[argv.index('-o') + 1]).write_text(json.dumps(
+                {'status': 'unchanged', 'summary': 'Илье нужны 2 победы подряд.', 'technical': 'computed'}))
+            return b''
+        assert argv[0] not in ('systemd-run', '/trusted/deploy')
+        return real_command(argv, **kwargs)
+    def fake_git(path, *args, **kwargs):
+        kwargs.pop('user', None)
+        assert args[0] != 'push'
+        return b'' if args[0] == 'fetch' else real_git(path, *args, **kwargs)
+    monkeypatch.setattr(work, 'command', fake_command)
+    monkeypatch.setattr(work, 'git', fake_git)
+    monkeypatch.setattr(work, 'trusted_directory', lambda p: None)
+    monkeypatch.setattr(work.pwd, 'getpwnam', lambda u: work.pwd.getpwuid(os.getuid()))
+    monkeypatch.setattr(os, 'chown', lambda *a: None)
+    result = work.run_work('Сколько нужно побед?', 31,
+        {'release_root': str(release), 'code_home': str(home), 'deploy_command': ['/trusted/deploy'],
+         'tennis_context': {'players': [{'name': 'Илья', 'elo': 950}]}}, lambda _: None)
+    assert calls == ['answer']
+    assert result['status'] == 'answered' and result['commit'] is None
+    assert not (release/'candidates'/'31').exists()

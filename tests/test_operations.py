@@ -34,6 +34,7 @@ def test_owner_work_is_durable_and_not_executed_in_bot(store):
     row = store.db.execute('SELECT * FROM operations').fetchone()
     assert row['kind'] == 'work' and row['status'] == 'pending'
     assert json.loads(row['request'])['text'] == 'Пересчитай метрику'
+    assert store.db.execute('SELECT count(*) FROM outbox').fetchone()[0] == 0
     store.ingest(update)
     assert store.claim() is None
 

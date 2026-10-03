@@ -85,6 +85,8 @@ def enqueue(store, command, text, actor, chat_id, dedupe, now=None):
     store.db.execute('INSERT OR IGNORE INTO operations(dedupe,kind,actor,chat_id,request,created_at) VALUES (?,?,?,?,?,?)',
         (dedupe, kind, actor, chat_id, json.dumps(request, ensure_ascii=False), now.timestamp()))
     op = store.db.execute('SELECT id FROM operations WHERE dedupe=?', (dedupe,)).fetchone()[0]
+    if command == '/work':
+        return None, None
     return f'Задача #{op} принята. Результат напишу в этот чат.', None
 
 

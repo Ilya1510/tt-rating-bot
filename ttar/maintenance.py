@@ -12,6 +12,7 @@ from pathlib import Path
 from .core import Store
 from .operations import MOSCOW, OWNER_ID, ROOM, schedule
 from .booking_policy import load_policy
+from .work_context import tennis_snapshot
 from .telegram import redact
 
 STOP = threading.Event()
@@ -35,6 +36,9 @@ def claim(store, work=False):
 
 def finish(store, op, status, text, result=None):
     with store.transaction():
+        if op['kind'] == 'work':
+            store.db.execute("UPDATE outbox SET status='superseded' WHERE status='pending' AND dedupe LIKE ?",
+                             (f"work-progress:{op['id']}:%",))
         store.db.execute('UPDATE operations SET status=?,finished_at=?,result=? WHERE id=?',
                          (status, time.time(), json.dumps(result or {}, ensure_ascii=False), op['id']))
         store.send(f"operation-result:{op['id']}", 'sendMessage', {
@@ -176,17 +180,13 @@ def work_loop(config):
                 finish(store, op, 'failed', 'Нет доступа к /work.')
                 continue
             try:
-                counter = 0
                 def progress(message):
-                    nonlocal counter
-                    counter += 1
-                    say(store, op['chat_id'], f"work-progress:{op['id']}:{counter}", f"/work #{op['id']}: {message}")
-                result = run_work(json.loads(op['request'])['text'], op['id'], config['work'], progress)
+                    LOG.info('Work %s: %s', op['id'], message)
+                work_config = dict(config['work'], tennis_context=tennis_snapshot(store, op['chat_id']))
+                result = run_work(json.loads(op['request'])['text'], op['id'], work_config, progress)
                 text = f"/work #{op['id']}: " + result['summary']
-                if result.get('technical'):
-                    text += '\n' + str(result['technical'])
-                if result.get('commit'):
-                    text += '\nhttps://github.com/Ilya1510/tt-rating-bot/commit/' + result['commit']
+                if result['status'] == 'done' and result.get('commit'):
+                    text += '\nИзменения применены, проверки пройдены.'
                 finish(store, op, result['status'], text, result)
             except Exception as error:
                 LOG.warning('Work operation %s failed: %s', op['id'], type(error).__name__)

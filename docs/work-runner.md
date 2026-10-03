@@ -87,3 +87,5 @@ If the room rejects it, report the rejection without shortening or splitting
 the request.
 
 The maintenance system unit deliberately omits `User=root`: on this host an explicit root user combined with `NoNewPrivileges` loses CAP_SETUID, which breaks `runuser`. Test the actual service path, not only a root shell.
+
+Every request first runs a read-only answer/intent pass with a root-owned tennis JSON snapshot outside Git. Questions return one answer without the edit/test/push/deploy stages. Only an explicit behavior-change request enters the writable coding pass. The snapshot contains player aliases and ratings, all active confirmed games in order, booking statuses and calculation settings; it excludes Telegram IDs, raw photos, chat messages, credentials and configuration secrets. Telegram receives only the final result; progress stays in the service journal.
