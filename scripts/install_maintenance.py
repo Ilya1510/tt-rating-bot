@@ -14,6 +14,7 @@ def run(argv,data=None):
  if r.returncode: raise RuntimeError('Installation step failed: '+argv[0])
  return r.stdout
 p=json.load(sys.stdin)
+if not shutil.which('bwrap'): raise RuntimeError('Install bubblewrap before enabling the controller')
 try: who=pwd.getpwnam('ttar-code')
 except KeyError:
  run(['useradd','--system','--create-home','--home-dir','/var/lib/ttar-code','--shell','/usr/sbin/nologin','ttar-code'])

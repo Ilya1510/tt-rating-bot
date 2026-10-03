@@ -293,7 +293,7 @@ def _run_work(request, job_id, config, progress, outcome):
         raise WorkError('Публикация вернула неизвестный результат; требуется проверка состояния.')
     outcome.update(status=deployed['status'],
                    summary=result['summary'] if deployed['status'] == 'done' else deployed.get('summary', 'Не удалось обновить сервис.'),
-                   technical=result['technical'] + '\n' + str(deployed.get('technical', '')),
+                   technical='Файлы: ' + ', '.join(names) + '\n' + str(deployed.get('technical', '')),
                    rollback_status=deployed.get('rollback_status', 'not_needed'))
     (release/f'work-{job_id}-deploy.json').write_text(json.dumps(outcome))
     return outcome

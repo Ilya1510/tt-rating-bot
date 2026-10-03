@@ -68,7 +68,7 @@ systemd credential. Успех — принятие ресурсом **ACCEPTED*
 
 - Код: `/Users/ilya-grid/tt-rating-bot`; на VM: `/opt/ttar`.
 - VM: `ilya-grid-vm-59750598.klg.yp-c.yandex.net`, alias `ilya-grid-vm`, Ubuntu 24.04.
-- Сервисы `ttar-worker`, `ttar-ocr`, таймер `ttar-backup` включены.
+- Сервисы `ttar-worker`, `ttar-ocr`, `ttar-maintenance`, таймер `ttar-backup` включены.
 - БД: `/var/lib/ttar/history.sqlite3`; конфигурация: `/etc/ttar/config.json`.
 - Backups: `/var/backups/ttar`, ежедневно 03:15 UTC (06:15 Москвы), 30 копий.
 - Отдельный `ttar-ocr` авторизован через ChatGPT; Codex 0.160.0 выполняется на VM.
@@ -230,7 +230,8 @@ ssh -t ilya-grid-vm "sudo -u ttar-ocr env HOME=/var/lib/ttar-ocr CODEX_HOME=/var
 ## Установка контроллера
 
 После настройки отдельного GitHub deploy key с записью только в этот репозиторий
-и отдельного cloud release service account:
+и отдельного cloud release service account. На сервере требуются `bubblewrap`
+(`bwrap`) и доступные user namespaces; отключать sandbox при ошибке нельзя:
 
 ```bash
 .venv/bin/python scripts/install_maintenance.py
