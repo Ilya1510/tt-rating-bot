@@ -10,6 +10,12 @@ bot release must never replace that installed controller automatically.
 An uncertain operation must be reconciled with GitHub and production before a new
 release. Existing job directories are not reused and deployments are not replayed.
 
+## Prerequisites
+
+Codex `workspace-write` on Linux requires installed bubblewrap (`bwrap`) and
+enabled user namespaces. If the sandbox is unavailable, the program must exit
+with an error; isolation must never be disabled.
+
 ## Host preparation
 
 - `/var/lib/ttar-code` and `jobs` are root-owned, mode 0755. Each generated job
