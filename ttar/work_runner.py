@@ -1,6 +1,8 @@
-"""Trusted /work pipeline. Install this module outside the editable release.
+"""Trusted /work pipeline for group questions and owner-authorized changes.
 
-Only the root maintenance daemon calls run_work after checking the Telegram owner.
+Group members may ask questions; only the owner (Ilya) may request changes.
+The owner may change the entire project, including this module and the controller.
+The root maintenance daemon calls run_work with the verified Telegram actor ID.
 Generated code and tests never execute as root. No provider output is logged.
 """
 import fcntl
