@@ -1,0 +1,36 @@
+[Unit]
+Description=TTAR trusted owner work and room booking controller
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/opt/ttar-control
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONPATH=/opt/ttar-control
+Environment=TTAR_MAINTENANCE_CONFIG=/etc/ttar/maintenance.json
+LoadCredentialEncrypted=maintenance.json:/etc/credstore.encrypted/ttar-maintenance.json
+ExecStart=/opt/ttar/.venv/bin/python -m ttar.maintenance
+Restart=on-failure
+RestartSec=10
+# A restart waits for its current isolated task; never kill an in-flight release.
+TimeoutStopSec=infinity
+UMask=0077
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+ReadOnlyPaths=/opt/ttar-control
+ReadWritePaths=/opt/ttar /var/lib/ttar /var/lib/ttar-code /var/lib/ttar-release /var/backups/ttar
+MemoryMax=2G
+TasksMax=256
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,39 @@
+[Unit]
+Description=TTAR cloud Telegram ingress
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ttar-poller
+Group=ttar-poller
+WorkingDirectory=/opt/ttar-poller
+ExecStart=/opt/ttar-poller/.venv/bin/python -m ttar.cloud_poller
+LoadCredentialEncrypted=credentials.json:/etc/credstore.encrypted/ttar-poller.json
+RuntimeDirectory=ttar-poller
+RuntimeDirectoryMode=0700
+UMask=0077
+Restart=on-failure
+RestartSec=5
+RestartPreventExitStatus=78
+TimeoutStopSec=70
+KillSignal=SIGTERM
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=yes
+CapabilityBoundingSet=
+MemoryMax=128M
+CPUQuota=20%
+TasksMax=16
+
+[Install]
+WantedBy=multi-user.target

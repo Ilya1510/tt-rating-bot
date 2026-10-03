@@ -54,7 +54,7 @@ def main():
     if args.chat_id >= 0:
         raise SystemExit('Expected a negative group chat ID')
     state = json.loads(STATE.read_text()) if STATE.exists() else {}
-    if state.get('ingress_mode') in ('cloud_only', 'cloud_gateway', 'network_probe'):
+    if state.get('ingress_mode') in ('cloud_only', 'cloud_gateway', 'cloud_vm_poll', 'network_probe'):
         raise SystemExit('Use scripts/enable_cloud_only.py for the cloud-only transport; direct Telegram access on VM is disabled.')
     cloud_poll = state.get('ingress_mode') == 'cloud_poll'
     secret_path = PRIVATE/'cloud-secrets.json'

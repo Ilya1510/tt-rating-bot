@@ -1,0 +1,136 @@
+import json
+from datetime import datetime
+from types import SimpleNamespace
+
+import pytest
+
+from ttar.bot import Bot
+from ttar.calendar_api import BookingResult
+from ttar.core import Store
+from ttar.maintenance import claim, run_booking, recover, check_pending
+from ttar.operations import MOSCOW, OWNER_ID, booking_request, enqueue, schedule
+from test_bot_webhook import FakeTelegram
+from test_core import store
+
+
+def now(value):
+    return datetime.fromisoformat(value).replace(tzinfo=MOSCOW)
+
+
+@pytest.mark.parametrize('command', ['/work изменить формулу', '/create_booking 2026-10-05', '/cancel_booking'])
+def test_owner_commands_reject_every_other_group_member(store, command):
+    for actor in (42, 9, 0):
+        store.ingest({'update_id': actor + 100, 'message': {'chat': {'id': -123}, 'from': {'id': actor}, 'text': command}})
+        Bot(store, FakeTelegram(), None, -123).handle(store.claim())
+    assert store.db.execute('SELECT count(*) FROM operations').fetchone()[0] == 0
+    assert all('только Илье' in json.loads(row[0])['text'] for row in store.db.execute('SELECT payload FROM outbox'))
+
+
+def test_owner_work_is_durable_and_not_executed_in_bot(store):
+    update = {'update_id': 1, 'message': {'chat': {'id': -123}, 'from': {'id': OWNER_ID},
+                                       'text': '/work@tt_chatgpt_rating_bot\nПересчитай метрику'}}
+    store.ingest(update)
+    Bot(store, FakeTelegram(), None, -123).handle(store.claim())
+    row = store.db.execute('SELECT * FROM operations').fetchone()
+    assert row['kind'] == 'work' and row['status'] == 'pending'
+    assert json.loads(row['request'])['text'] == 'Пересчитай метрику'
+    store.ingest(update)
+    assert store.claim() is None
+
+
+@pytest.mark.parametrize('day,target', [('2026-10-02', '2026-10-05'), ('2026-10-05', '2026-10-08')])
+def test_schedule_exact_window_moscow_and_restart_dedup(store, day, target):
+    assert not schedule(store, -123, now(day + 'T19:00:59'))
+    assert schedule(store, -123, now(day + 'T19:01:00'))
+    assert not schedule(store, -123, now(day + 'T19:01:01'))
+    assert not schedule(store, -123, now(day + 'T23:59:00'))
+    row = store.db.execute('SELECT * FROM operations').fetchone()
+    assert row['actor'] == 0 and row['dedupe'] == 'scheduled:' + target
+    request = json.loads(row['request'])
+    assert request == {'start': target + 'T19:00:00+03:00', 'end': target + 'T20:00:00+03:00'}
+
+
+def test_schedule_does_not_create_past_friday_on_saturday(store):
+    assert not schedule(store, -123, now('2026-10-03T21:00:00'))
+
+
+def test_manual_slot_respects_room_limits_and_72_hours():
+    value = booking_request('2026-10-05 19:00 90', now('2026-10-02T19:01:00'))
+    assert value['end'] == '2026-10-05T20:30:00+03:00'
+    with pytest.raises(ValueError, match='3 дня'):
+        booking_request('2026-10-05 19:00', now('2026-10-02T19:00:00'))
+    with pytest.raises(ValueError, match='90 минут'):
+        booking_request('2026-10-05 19:00 120', now('2026-10-03T19:00:00'))
+    with pytest.raises(ValueError, match='будущее'):
+        booking_request('2026-10-01 19:00', now('2026-10-03T19:00:00'))
+
+
+def operation(store, key='manual:1'):
+    with store.transaction():
+        enqueue(store, '/create_booking', '/create_booking 2026-10-05 19:00', OWNER_ID, -123,
+                key, now('2026-10-03T19:00:00'))
+    return claim(store)
+
+
+def test_lost_create_response_never_creates_again_even_after_not_found(store):
+    class Client:
+        created = 0
+        def create_booking(self, *args):
+            self.created += 1
+            return BookingResult('uncertain', reason='Ответ потерян')
+        def reconcile_booking(self, *args):
+            return BookingResult('not_found', reason='Не найдено')
+    client = Client()
+    run_booking(store, client, operation(store))
+    run_booking(store, client, operation(store, 'manual:2'))
+    run_booking(store, client, operation(store, 'manual:3'))
+    assert client.created == 1
+    assert store.db.execute('SELECT create_attempted FROM bookings').fetchone()[0] == 1
+
+
+def test_id_committed_before_verification_and_manual_auto_no_duplicate(store):
+    class Client:
+        created = 0
+        def create_booking(self, start, end, key, saved):
+            self.created += 1
+            saved('event123')
+            assert store.db.execute('SELECT event_id FROM bookings').fetchone()[0] == 'event123'
+            return BookingResult('accepted', 'event123', 'https://example.com/event123')
+        def verify_booking(self, *args):
+            return BookingResult('accepted', 'event123', 'https://example.com/event123')
+    client = Client()
+    run_booking(store, client, operation(store))
+    run_booking(store, client, operation(store, 'scheduled:2026-10-05'))
+    assert client.created == 1
+    assert store.db.execute('SELECT count(*) FROM bookings').fetchone()[0] == 1
+
+
+def test_cancel_confirmation_checks_cancellation_instead_of_reconfirming_booking(store):
+    op = operation(store)
+    class Client:
+        cancelled = 0
+        def create_booking(self, start, end, key, saved):
+            saved('event123')
+            return BookingResult('accepted', 'event123', 'https://example.com/event123')
+        def cancel_booking(self, *args):
+            self.cancelled += 1
+            return BookingResult('pending' if self.cancelled == 1 else 'cancelled', 'event123')
+        def verify_booking(self, *args):
+            pytest.fail('Should check pending cancellation')
+    client = Client()
+    run_booking(store, client, op)
+    with store.transaction():
+        enqueue(store, '/cancel_booking', '/cancel_booking 2026-10-05', OWNER_ID, -123, 'cancel:1')
+    run_booking(store, client, claim(store))
+    store.db.execute('UPDATE bookings SET next_check=0')
+    check_pending(store, client, -123)
+    assert store.db.execute('SELECT status FROM bookings').fetchone()[0] == 'cancelled'
+
+
+def test_restart_does_not_repeat_work_but_reconciles_bookings(store):
+    operation(store)
+    with store.transaction():
+        enqueue(store, '/work', '/work изменить метрику', OWNER_ID, -123, 'work:1')
+    claim(store, work=True)
+    recover(store)
+    assert dict(store.db.execute('SELECT kind,status FROM operations')) == {'book': 'pending', 'work': 'uncertain'}

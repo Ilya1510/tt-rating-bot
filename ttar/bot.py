@@ -7,9 +7,14 @@ from .core import balance_reached
 from .webhook import chat_of
 from .photo import fingerprints
 from .recognizer import PARSER_VERSION
+from .operations import COMMANDS as OWNER_COMMANDS, enqueue as enqueue_operation
 
 ROSTER = [('М', 'Максим'), ('И', 'Илья'), ('Р', 'Рома'), ('В', 'Валя')]
-HELP = 'Пришли фото, проверь список и нажми «Подтвердить». Нужны 2 разных участника.\n/stat N — последние N партий. По умолчанию N = 1000.'
+HELP = ('Пришли фото, проверь список и нажми «Подтвердить». Нужны 2 разных участника.\n'
+        '/stat N — последние N партий. По умолчанию N = 1000.\n'
+        'Для Ильи:\n/work задача — изменить код бота.\n'
+        '/create_booking ГГГГ-ММ-ДД ЧЧ:ММ [минуты] — забронировать зал.\n'
+        '/cancel_booking ГГГГ-ММ-ДД [ЧЧ:ММ] — отменить нашу бронь.')
 
 
 def parse_window(value, default=1000):
@@ -248,6 +253,8 @@ class Bot:
             self.store.db.execute("UPDATE jobs SET status='done',last_error=NULL WHERE id=?", (job['id'],))
 
     def command(self, command, text, actor, member, key='command'):
+        if command in OWNER_COMMANDS:
+            return enqueue_operation(self.store, command, text, actor, self.allowed_chat, key)
         args = text.split(maxsplit=1)[1] if len(text.split(maxsplit=1)) > 1 else ''
         if command == '/stat':
             return statistics(self.store, parse_window(args, int(self.store.setting('stats_window'))))

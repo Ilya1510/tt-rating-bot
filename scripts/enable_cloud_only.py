@@ -10,15 +10,20 @@ from deploy_cloud import PRIVATE, ROOT, STATE, save, yc
 import sys
 sys.path.insert(0, str(ROOT))
 from ttar.telegram import Telegram
+from deploy_cloud_poller import cloud_bot_call
 
 
 def main():
     state = json.loads(STATE.read_text())
-    token = json.loads((PRIVATE/'secrets.json').read_text())['telegram_token']
-    telegram = Telegram(token, '149.154.167.220')
-    if telegram.call('getMe').get('username') != 'tt_chatgpt_rating_bot':
+    cloud_vm_poll = state.get('ingress_mode') == 'cloud_vm_poll'
+    if cloud_vm_poll:
+        call = cloud_bot_call
+    else:
+        token = json.loads((PRIVATE/'secrets.json').read_text())['telegram_token']
+        call = Telegram(token, '149.154.167.220').call
+    if call('getMe').get('username') != 'tt_chatgpt_rating_bot':
         raise RuntimeError('Wrong Telegram bot; no cloud changes made')
-    webhook_url = telegram.call('getWebhookInfo').get('url', '')
+    webhook_url = call('getWebhookInfo').get('url', '')
     gateway_active = bool(state.get('gateway_url') and webhook_url == state['gateway_url'])
     if webhook_url and not gateway_active:
         raise RuntimeError('Unexpected active webhook; no cloud changes made')
@@ -48,7 +53,7 @@ def main():
         cmd = ['serverless', 'function', 'version', 'create', '--function-id', function,
                '--runtime', 'python312', '--entrypoint', 'index.cloud_handler', '--memory', '256m',
                '--execution-timeout', '60s', '--service-account-id', producer,
-               '--source-path', str(source), '--no-logging', '--environment',
+               '--source-path', str(source), '--tags', 'live', '--no-logging', '--environment',
                f"ALLOWED_CHAT_ID={state['allowed_chat_id']},QUEUE_URL={state['queue_url']},ACCEPT_FROM={state['accept_from']},TG_IPV4_ADDRESS=149.154.167.220"]
         for name in ('AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'TG_TOKEN', 'WEBHOOK_SECRET'):
             cmd += ['--secret', f"environment-variable={name},id={state['secret_id']},version-id={state['poll_secret_version_id']},key={name}"]
@@ -57,7 +62,9 @@ def main():
         save(STATE, state)
     yc('serverless', 'function', 'set-scaling-policy', function, '--tag', '$latest',
        '--zone-instances-limit', '1', '--zone-requests-limit', '2', '--provisioned-instances-count', '0')
-    endpoint = 'https://functions.yandexcloud.net/' + function + '?integration=raw'
+    yc('serverless', 'function', 'set-scaling-policy', function, '--tag', 'live',
+       '--zone-instances-limit', '1', '--zone-requests-limit', '2', '--provisioned-instances-count', '0')
+    endpoint = 'https://functions.yandexcloud.net/' + function + '?integration=raw&tag=live'
     data = {'config': {'queue_url': state['queue_url'], 'allowed_chat_id': state['allowed_chat_id'],
                        'accept_from': state['accept_from'], 'telegram_cloud_url': endpoint},
             'credentials': {'cloud_function_key': key,
@@ -68,18 +75,21 @@ def main():
                          input=json.dumps(data).encode(), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if run.returncode:
         raise RuntimeError('VM cloud transport configuration failed; raw output withheld')
-    state['ingress_mode'] = 'cloud_gateway' if gateway_active else 'cloud_only'
+    state['ingress_mode'] = 'cloud_vm_poll' if cloud_vm_poll else ('cloud_gateway' if gateway_active else 'cloud_only')
     state['telegram_cloud_url'] = endpoint
     state['telegram_on_vm'] = False
     state['webhook_configured'] = gateway_active
     save(STATE, state)
     # Resume only after the worker has no Telegram credential or direct API client.
-    yc('serverless', 'trigger', 'pause' if gateway_active else 'resume', state['poll_timer_id'])
-    state['poll_timer_paused'] = gateway_active
+    yc('serverless', 'trigger', 'pause' if gateway_active or cloud_vm_poll else 'resume', state['poll_timer_id'])
+    state['poll_timer_paused'] = gateway_active or cloud_vm_poll
     save(STATE, state)
-    telegram.call('setMyCommands', commands=[
+    call('setMyCommands', commands=[
         {'command': 'confirm', 'description': 'Подтвердить последний список партий'},
-        {'command': 'stat', 'description': 'Последние N партий, по умолчанию 1000'}])
+        {'command': 'stat', 'description': 'Последние N партий, по умолчанию 1000'},
+        {'command': 'work', 'description': 'Для Ильи: изменить код бота'},
+        {'command': 'create_booking', 'description': 'Для Ильи: забронировать зал'},
+        {'command': 'cancel_booking', 'description': 'Для Ильи: отменить нашу бронь'}])
     print(json.dumps({'mode': state['ingress_mode'], 'function_id': function,
                       'timer_id': state['poll_timer_id'], 'telegram_on_vm': False}))
 

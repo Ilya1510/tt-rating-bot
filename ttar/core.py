@@ -4,6 +4,7 @@ import sqlite3
 import time
 import unicodedata
 from pathlib import Path
+from .operations import SCHEMA as OPERATIONS_SCHEMA
 
 
 def elo(a, b, winner, k=32):
@@ -61,7 +62,12 @@ class Store:
         self.db.execute('PRAGMA journal_mode=WAL')
         self.db.execute('PRAGMA synchronous=FULL')
         self.db.execute('PRAGMA foreign_keys=ON')
-        self.db.executescript(SCHEMA)
+        self.db.executescript(SCHEMA + OPERATIONS_SCHEMA)
+        booking_columns = {row[1] for row in self.db.execute('PRAGMA table_info(bookings)')}
+        for name, definition in [('create_attempted', 'INTEGER NOT NULL DEFAULT 0'),
+                                  ('pending_action', "TEXT NOT NULL DEFAULT 'book'")]:
+            if name not in booking_columns:
+                self.db.execute(f'ALTER TABLE bookings ADD COLUMN {name} {definition}')
         if 'pixel_sha256' not in {row[1] for row in self.db.execute('PRAGMA table_info(photos)')}:
             self.db.execute('ALTER TABLE photos ADD COLUMN pixel_sha256 TEXT')
         self.db.execute('CREATE UNIQUE INDEX IF NOT EXISTS photos_pixel_hash ON photos(chat_id,pixel_sha256) WHERE pixel_sha256 IS NOT NULL')
