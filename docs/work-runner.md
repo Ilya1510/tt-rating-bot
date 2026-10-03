@@ -1,91 +1,51 @@
-# Owner /work executor
+# Work runner
 
-The bot authenticates the owner and persists the operation. A separate root
-maintenance service authenticates it again and calls `run_work(request, job_id,
-config, progress)`. Install this controller in `/opt/ttar-control`; the editable
-bot release must never replace that installed controller automatically.
+All group members can ask questions. Only the authenticated owner Telegram ID
+220427487 can enter the writable stage. The controller reads the actor from the
+durable Telegram operation, never from the prompt or the model result. Anonymous
+senders are rejected. Booking commands remain owner-only.
 
-`run_work` returns `status`, `summary`, `technical`, `commit`, and, after deployment,
-`rollback_status`. `status` is `done`, `unchanged`, `failed`, or `uncertain`.
-An uncertain operation must be reconciled with GitHub and production before a new
-release. Existing job directories are not reused and deployments are not replayed.
+Every request first runs a read-only answer/intent pass with a root-owned tennis
+JSON snapshot outside Git. Questions return one answer without editing, testing,
+pushing or deploying. The snapshot excludes Telegram IDs, raw photos, chat text,
+credentials and configuration secrets. Progress stays in the journal; Telegram
+receives only a final result.
 
-## Prerequisites
+The owner may change all project code, including access policy, work_runner,
+maintenance, release, instructions, tests, dependencies and deployment files.
+The prior policy describes current behavior and does not overrule a new explicit
+owner instruction. Secrets, Git internals, runtime state and symlinks are not
+published. Code and tests still run as the isolated ttar-code user, not as root.
+Linux requires bubblewrap and working user namespaces; isolation must not be
+silently disabled. The maintenance system unit omits User=root because that
+setting loses CAP_SETUID on this host with NoNewPrivileges.
 
-Codex `workspace-write` on Linux requires installed bubblewrap (`bwrap`) and
-enabled user namespaces. If the sandbox is unavailable, the program must exit
-with an error; isolation must never be disabled.
+After tests pass, the runner pushes a commit and calls the previously installed
+release helper. It installs runtime code and the controller snapshot. A changed
+controller saves the current result as awaiting_reload and exits gracefully;
+systemd restarts it. Only the new controller completes the task and queues its
+final success message after startup. A copied standalone guard checks startup
+and restores prior modules, units and policy on failure without restoring the
+SQLite database. The guard never interrupts the old controller while it is
+still finishing a task.
 
-## Host preparation
+The service retains separate ttar-code and root release identities. Root owns
+/var/lib/ttar-release, the repository-limited deploy key and cloud release key.
+The code workspace never receives those keys. The test unit has no network,
+production database, credentials or Codex authentication.
 
-- `/var/lib/ttar-code` and `jobs` are root-owned, mode 0755. Each generated job
-  directory and `.codex` belong to the unprivileged `ttar-code` user. That user
-  must not belong to production, credential, or administration groups.
-- `/var/lib/ttar-release` is root-owned, mode 0711 or 0755. The `repo` clone and
-  `candidates` directories are root-owned, readable/traversable for testing.
-  The GitHub deploy key `github_ed25519` is mode 0600. Its verified `known_hosts`
-  file lives alongside it. The release repository tracks origin/main.
-- The maintenance service needs an encrypted `maintenance.json` credential and
-  `/etc/ttar/maintenance.json` configuration. No Telegram token is on this host.
-- The trusted release helper owns cloud function packaging, production backup,
-  service restart, health checks, and rollback. Its code and entry point live in
-  `/opt/ttar-control`, not in the generated candidate.
+Optional deploy/owner_apply.py is an owner-authorized deployment hook, invoked
+after tests with candidate directory and previous commit arguments under root.
+It must be idempotent, preserve data and avoid printing secrets. It is unnecessary
+for ordinary Python/control/policy changes. Generic script changes are copied
+alongside runtime files; the hook can apply additional requested infrastructure
+or dependency changes. Cloud Telegram ingress remains on the separate cloud VM;
+changes there require a working deployment route, not direct Telegram from the
+internal VM. Failures must be reported honestly.
 
-Example work configuration (no secrets):
+booking-policy.json regular_minutes is validated and atomically applied to the
+scheduler. The current regular target is 19:00–21:30. The room may reject it under
+its own 90-minute policy; the bot must not silently shorten or split a booking.
 
-```json
-{
-  "code_user": "ttar-code",
-  "code_home": "/var/lib/ttar-code",
-  "release_root": "/var/lib/ttar-release",
-  "codex": "/opt/ttar/bin/codex",
-  "code_timeout": 1800,
-  "deploy_command": ["/opt/ttar/.venv/bin/python", "/opt/ttar-control/release_entry.py"]
-}
-```
-
-The deploy command receives two extra argv values: the root-owned candidate
-directory and the base origin/main commit. It must emit one JSON object with
-`status` (`done`, `failed`, or `uncertain`), `summary`, `technical`, and
-`rollback_status`. If its outcome cannot be read, the job remains uncertain.
-It must independently know the actual prior deployed version for rollback; the
-base GitHub commit may differ after a previous failed deployment.
-
-## Execution and limits
-
-Codex executes as `ttar-code` with `workspace-write` sandbox, network disabled
-for shell commands, plugins disabled, and a minimal environment. The workspace
-contains a fresh archive of origin/main and no deploy keys or production data.
-The account needs its own Codex authentication; the model process can access that
-account's authentication, which is never included in the workspace or reports.
-
-Only Python bot modules, Python tests, README, Markdown docs, and `booking-policy.json` may change.
-The runner, maintenance controller, release helper, dependencies, infrastructure,
-links and executable file modes are excluded. Requests requiring those changes
-report that automatic publication is unsupported. The test unit has no network,
-Codex authentication, production DB or service credentials, and sees the candidate
-read-only. Tests execute the full pytest suite under `ttar-code`.
-
-After tests pass, the runner commits and pushes to main, then invokes the fixed
-release helper. A rejected push does not deploy. Production failures can therefore
-leave a tested commit on GitHub while production remains on its prior version;
-the final report includes the commit and deployment/rollback outcome.
-
-Provider and subprocess output is captured and never copied to chat. The final
-structured agent summary is bounded and redacted. Passing `redact_values` adds
-known secrets to the built-in pattern filter. No diff is sent to Telegram.
-
-Smoke-test without a deployment: use a fresh job ID and request an inspection with
-no edits and an `unchanged` result. This still checks GitHub fetch, workspace
-isolation, Codex authentication and structured output.
-
-Regular booking duration is data in `booking-policy.json` (`regular_minutes`, 1–150). The trusted controller reloads it for each scheduler tick; the release helper validates and atomically installs it. Protected controller Python modules are not replaced by `/work`.
-
-The current owner-approved policy is 150 minutes: one regular booking request
-for 19:00–21:30 Europe/Moscow, despite the room's documented 90-minute limit.
-If the room rejects it, report the rejection without shortening or splitting
-the request.
-
-The maintenance system unit deliberately omits `User=root`: on this host an explicit root user combined with `NoNewPrivileges` loses CAP_SETUID, which breaks `runuser`. Test the actual service path, not only a root shell.
-
-Every request first runs a read-only answer/intent pass with a root-owned tennis JSON snapshot outside Git. Questions return one answer without the edit/test/push/deploy stages. Only an explicit behavior-change request enters the writable coding pass. The snapshot contains player aliases and ratings, all active confirmed games in order, booking statuses and calculation settings; it excludes Telegram IDs, raw photos, chat messages, credentials and configuration secrets. Telegram receives only the final result; progress stays in the service journal.
+A full verification must exercise the actual system service. A root-shell run
+alone does not check systemd privilege restrictions or controller handoff.

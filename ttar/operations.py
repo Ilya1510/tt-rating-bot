@@ -60,8 +60,10 @@ def booking_request(args, now):
 
 
 def enqueue(store, command, text, actor, chat_id, dedupe, now=None):
-    if actor != OWNER_ID:
+    if actor != OWNER_ID and command != '/work':
         raise ValueError('Эта команда доступна только Илье.')
+    if not isinstance(actor, int) or actor <= 0:
+        raise ValueError('Нужен запрос от личного Telegram-аккаунта.')
     now = now or datetime.now(MOSCOW)
     args = text.split(maxsplit=1)[1].strip() if len(text.split(maxsplit=1)) > 1 else ''
     if command == '/work':

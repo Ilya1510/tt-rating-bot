@@ -10,16 +10,18 @@ import pytest
 from ttar import work_runner as work
 
 
-@pytest.mark.parametrize('name', ['ttar/core.py', 'tests/test_score.py', 'README.md', 'docs/work.md'])
+@pytest.mark.parametrize('name', ['ttar/core.py', 'tests/test_score.py', 'README.md', 'docs/work.md',
+    'ttar/work_runner.py', 'ttar/maintenance.py', 'ttar/release.py', 'scripts/deploy.py',
+    'requirements.txt', 'deploy/owner_apply.py', '.github/workflows/tests.yml'])
 def test_allowlist_accepts_bot_tests_and_docs(name):
     assert work.allowed_path(name)
 
 
-@pytest.mark.parametrize('name', ['../ttar/core.py', '/ttar/core.py', 'ttar/.secret.py',
-    'ttar/work_runner.py', 'ttar/maintenance.py', 'tests/a/../../deploy/install.py',
-    '.git/config', 'scripts/deploy.py', 'requirements.txt', 'tests/hack.sh', 'docs/key.pem',
+@pytest.mark.parametrize('name', ['../ttar/core.py', '/ttar/core.py', 'ttar/.env',
+    '.env', 'auth.json', 'tests/a/../../deploy/install.py',
+    '.git/config', 'runtime/private.json', 'credentials.json', 'docs/key.pem',
     'ttar/core.py\n', 'ttar\\core.py'])
-def test_control_and_deployment_paths_cannot_be_edited(name):
+def test_secret_and_internal_paths_cannot_be_published(name):
     assert not work.allowed_path(name)
 
 
@@ -124,8 +126,7 @@ def test_validate_applied_patch_rejects_symlinks_and_protected_files(tmp_path):
     work.git(repo, 'reset', '--hard', base)
     (repo/'ttar'/'work_runner.py').write_text('print("privilege escalation")\n')
     work.git(repo, 'add', '.')
-    with pytest.raises(work.WorkError, match='защищённые'):
-        work.validate_changes(repo, base)
+    assert 'ttar/work_runner.py' in work.validate_changes(repo, base)
 
 
 @pytest.mark.parametrize('test_fails,deploy_fails', [(True, False), (False, False), (False, True)])
@@ -178,7 +179,7 @@ def test_pipeline_tests_before_push_before_deploy(tmp_path, monkeypatch, test_fa
     monkeypatch.setattr(os, 'chown', lambda *a: None)
     result = work.run_work('Измени метрику', 30,
                           {'release_root': str(release), 'code_home': str(home),
-                           'deploy_command': ['/trusted/deploy'], 'model': 'example-model'}, lambda s: None)
+                           'deploy_command': ['/trusted/deploy'], 'model': 'example-model', 'actor_id': work.OWNER_ID}, lambda s: None)
     assert events == (['test'] if test_fails else ['test', 'push', 'deploy'])
     assert result['status'] == ('failed' if test_fails else 'uncertain' if deploy_fails else 'done')
     if not test_fails:
@@ -186,7 +187,8 @@ def test_pipeline_tests_before_push_before_deploy(tmp_path, monkeypatch, test_fa
         assert (release/'work-30-deploy.json').exists()
 
 
-def test_question_uses_readonly_snapshot_and_never_tests_pushes_or_deploys(tmp_path, monkeypatch):
+@pytest.mark.parametrize('decision,status', [('unchanged', 'answered'), ('changed', 'failed')])
+def test_nonowner_never_enters_writable_stage_even_if_model_requests_change(tmp_path, monkeypatch, decision, status):
     release, home = tmp_path/'release', tmp_path/'code'
     release.mkdir(); home.mkdir()
     repo = release/'repo'
@@ -203,7 +205,7 @@ def test_question_uses_readonly_snapshot_and_never_tests_pushes_or_deploys(tmp_p
             assert context.stat().st_mode & 0o222 == 0
             assert not (home/'jobs'/'31'/'tennis.json').exists()
             Path(argv[argv.index('-o') + 1]).write_text(json.dumps(
-                {'status': 'unchanged', 'summary': 'Илье нужны 2 победы подряд.', 'technical': 'computed'}))
+                {'status': decision, 'summary': 'Илье нужны 2 победы подряд.', 'technical': 'computed'}))
             return b''
         assert argv[0] not in ('systemd-run', '/trusted/deploy')
         return real_command(argv, **kwargs)
@@ -218,7 +220,9 @@ def test_question_uses_readonly_snapshot_and_never_tests_pushes_or_deploys(tmp_p
     monkeypatch.setattr(os, 'chown', lambda *a: None)
     result = work.run_work('Сколько нужно побед?', 31,
         {'release_root': str(release), 'code_home': str(home), 'deploy_command': ['/trusted/deploy'],
-         'tennis_context': {'players': [{'name': 'Илья', 'elo': 950}]}}, lambda _: None)
+         'actor_id': 42, 'tennis_context': {'players': [{'name': 'Илья', 'elo': 950}]}}, lambda _: None)
     assert calls == ['answer']
-    assert result['status'] == 'answered' and result['commit'] is None
+    assert result['status'] == status and result['commit'] is None
+    if decision == 'changed':
+        assert 'только Илья' in result['summary']
     assert not (release/'candidates'/'31').exists()

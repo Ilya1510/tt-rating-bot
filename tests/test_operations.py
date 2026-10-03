@@ -17,7 +17,7 @@ def now(value):
     return datetime.fromisoformat(value).replace(tzinfo=MOSCOW)
 
 
-@pytest.mark.parametrize('command', ['/work изменить формулу', '/create_booking 2026-10-05', '/cancel_booking'])
+@pytest.mark.parametrize('command', ['/create_booking 2026-10-05', '/cancel_booking'])
 def test_owner_commands_reject_every_other_group_member(store, command):
     for actor in (42, 9, 0):
         store.ingest({'update_id': actor + 100, 'message': {'chat': {'id': -123}, 'from': {'id': actor}, 'text': command}})
@@ -37,6 +37,15 @@ def test_owner_work_is_durable_and_not_executed_in_bot(store):
     assert store.db.execute('SELECT count(*) FROM outbox').fetchone()[0] == 0
     store.ingest(update)
     assert store.claim() is None
+
+
+def test_group_member_can_enqueue_question_but_cannot_book(store):
+    store.ingest({'update_id': 10, 'message': {'chat': {'id': -123}, 'from': {'id': 42},
+                                            'text': '/work Сколько у меня побед?'}})
+    Bot(store, FakeTelegram(), None, -123).handle(store.claim())
+    row = store.db.execute('SELECT actor,kind,status FROM operations').fetchone()
+    assert tuple(row) == (42, 'work', 'pending')
+    assert store.db.execute('SELECT count(*) FROM outbox').fetchone()[0] == 0
 
 
 @pytest.mark.parametrize('day,target', [('2026-10-02', '2026-10-05'), ('2026-10-05', '2026-10-08')])

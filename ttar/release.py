@@ -89,7 +89,7 @@ def run(argv, cwd=None):
 
 
 def install_tree(source, target):
-    # Only runtime modules; control-service snapshot is deliberately untouched.
+    # Both runtime and controller releases are installed by the prior release helper.
     staged = target/'ttar.next'
     if staged.exists():
         shutil.rmtree(staged)
@@ -105,6 +105,22 @@ def install_tree(source, target):
     staged.rename(target/'ttar')
 
 
+def install_project_files(source, target):
+    for name in ('scripts', 'deploy', 'docs', 'tests'):
+        if (source/name).exists():
+            shutil.copytree(source/name, target/name, dirs_exist_ok=True,
+                            ignore=shutil.ignore_patterns('__pycache__'))
+    for name in ('README.md', 'requirements.txt', 'requirements-dev.txt'):
+        if (source/name).exists():
+            shutil.copyfile(source/name, target/name)
+
+
+def controller_changed(source, control):
+    def files(root):
+        return {p.relative_to(root): p.read_bytes() for p in root.rglob('*.py')}
+    return files(source/'ttar') != files(control/'ttar')
+
+
 def main(candidate, old_commit):
     if os.geteuid() != 0:
         raise ReleaseError('Root control service required')
@@ -116,13 +132,38 @@ def main(candidate, old_commit):
     cloud = Cloud(creds['release_cloud_key'])
     old = cloud.live(settings['function_id'])
     commit = run(['git', '-c', 'core.hooksPath=/dev/null', '-C', str(root), 'rev-parse', 'HEAD']).decode().strip()
+    deployed_marker = Path('/var/lib/ttar-release/deployed.json')
+    previous_commit = json.loads(deployed_marker.read_text())['commit'] if deployed_marker.exists() else old_commit
     live_root = Path('/opt/ttar')
     policy = load_policy(root/'booking-policy.json')
     policy_file = live_root/'booking-policy.json'
     previous_policy = policy_file.read_bytes() if policy_file.exists() else None
+    control = Path('/opt/ttar-control')
+    reload_controller = controller_changed(root, control) or (root/'deploy/owner_apply.py').exists()
+    old_units = {}
+    for unit in (root/'deploy').glob('ttar-*.service'):
+        # The cloud poller belongs to a separate cloud host.
+        if unit.name == 'ttar-poller.service':
+            continue
+        target = Path('/etc/systemd/system')/unit.name
+        if not target.exists() or target.read_bytes() != unit.read_bytes():
+            old_units[unit.name] = target.read_text() if target.exists() else None
+            reload_controller = True
+    guard_dir = Path('/var/lib/ttar-release/guards')
+    guard_dir.mkdir(mode=0o700, exist_ok=True)
+    guard_script = guard_dir/(commit + '.py')
+    # Capture the currently trusted guard, not its unactivated replacement.
+    if reload_controller:
+        shutil.copyfile(control/'ttar/controller_guard.py', guard_script)
+        old_ready = Path('/var/lib/ttar-release/controller-ready.json')
+        old_pid = json.loads(old_ready.read_text()).get('pid') if old_ready.exists() else None
+        state_file = guard_dir/(commit + '.json')
+        state_file.write_text(json.dumps({'commit': commit, 'old_commit': previous_commit, 'old_pid': old_pid,
+            'old_policy': (previous_policy or b'{"regular_minutes":150}').decode(),
+            'old_units': old_units, 'database': settings['database']}))
     files = ['webhook.py', 'telegram.py', '__init__.py']
     changed_cloud = any((root/'ttar'/f).read_bytes() != (live_root/'ttar'/f).read_bytes() for f in files)
-    promoted = installed = policy_installed = False
+    promoted = installed = policy_installed = control_installed = False
     try:
         if changed_cloud:
             tag = 'candidate-' + commit[:12]
@@ -139,24 +180,52 @@ def main(candidate, old_commit):
         backup.chmod(0o600)
         install_tree(root, live_root)
         installed = True
+        install_project_files(root, live_root)
         staged_policy = live_root/'booking-policy.next'
         staged_policy.write_text(json.dumps(policy) + '\n')
         staged_policy.chmod(0o644)
         staged_policy.replace(policy_file)
         policy_installed = True
+        hook = root/'deploy/owner_apply.py'
+        if hook.exists():
+            run(['/opt/ttar/.venv/bin/python', str(hook), str(root), previous_commit], cwd=str(root))
+        if reload_controller:
+            install_tree(root, control)
+            control_installed = True
+            (control/'commit').write_text(commit)
+            for name in old_units:
+                target = Path('/etc/systemd/system')/name
+                shutil.copyfile(root/'deploy'/name, target)
+                target.chmod(0o644)
+            if old_units:
+                run(['systemctl', 'daemon-reload'])
         run(['systemctl', 'restart', 'ttar-worker.service'])
         if (root/'ttar/recognizer.py').read_bytes() != (live_root/'ttar.previous/recognizer.py').read_bytes():
             run(['systemctl', 'restart', 'ttar-ocr.service'])
         time.sleep(2)
         run(['systemctl', 'is-active', '--quiet', 'ttar-worker.service', 'ttar-ocr.service'])
         Path('/var/lib/ttar-release/deployed.json').write_text(json.dumps({'commit': commit, 'at': time.time()}))
+        if reload_controller:
+            run(['systemd-run', '--quiet', '--collect', '--unit=ttar-reload-' + commit[:12],
+                 '/opt/ttar/.venv/bin/python', str(guard_script), str(state_file)])
         return {'status': 'done', 'summary': 'Изменение опубликовано.',
                 'technical': 'Тесты пройдены; БД сохранена; сервисы работают.' +
                     (' Облачная функция проверена и обновлена.' if changed_cloud else ' Облачная функция не требовала изменений.'),
-                'rollback_status': 'not_needed'}
+                'rollback_status': 'not_needed', 'controller_reload': reload_controller}
     except Exception as error:
         recovered = True
         try:
+            if control_installed:
+                shutil.rmtree(control/'ttar')
+                (control/'ttar.previous').rename(control/'ttar')
+                (control/'commit').write_text(previous_commit)
+                for name, text in old_units.items():
+                    target = Path('/etc/systemd/system')/name
+                    if text is None:
+                        target.unlink(missing_ok=True)
+                    else:
+                        target.write_text(text)
+                run(['systemctl', 'daemon-reload'])
             if policy_installed:
                 if previous_policy is None:
                     policy_file.unlink()

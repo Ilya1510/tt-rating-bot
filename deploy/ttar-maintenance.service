@@ -28,8 +28,7 @@ ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
 RestrictSUIDSGID=true
-ReadOnlyPaths=/opt/ttar-control
-ReadWritePaths=/opt/ttar /var/lib/ttar /var/lib/ttar-code /var/lib/ttar-release /var/backups/ttar
+ReadWritePaths=/opt/ttar /opt/ttar-control /var/lib/ttar /var/lib/ttar-code /var/lib/ttar-release /var/backups/ttar /etc/systemd/system
 MemoryMax=2G
 TasksMax=256
 

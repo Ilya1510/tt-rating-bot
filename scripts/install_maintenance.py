@@ -34,6 +34,7 @@ for name,source in p['files'].items():
  target=root/name;target.parent.mkdir(exist_ok=True);target.parent.chmod(0o755);target.write_text(source);target.chmod(0o644)
 (root/'release_entry.py').write_text("import runpy\nrunpy.run_module('ttar.release',run_name='__main__')\n")
 (root/'release_entry.py').chmod(0o644)
+(root/'commit').write_text(p['commit']);(root/'commit').chmod(0o644)
 config=Path('/etc/ttar/maintenance.json');config.write_text(json.dumps(p['config']));config.chmod(0o600)
 encrypted=run(['systemd-creds','encrypt','--with-key=host','--name=maintenance.json','-','-'],json.dumps(p['credentials']).encode())
 target=Path('/etc/credstore.encrypted/ttar-maintenance.json');target.write_bytes(encrypted);target.chmod(0o600)
@@ -52,7 +53,7 @@ print(json.dumps({'control_installed':True,'calendar_credential':bool(p['credent
 
 def main():
     state = json.loads(STATE.read_text())
-    data = {'files': {str(p.relative_to(ROOT)): p.read_text() for p in (ROOT/'ttar').glob('*.py')},
+    data = {'commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT).decode().strip(), 'files': {str(p.relative_to(ROOT)): p.read_text() for p in (ROOT/'ttar').glob('*.py')},
             'unit': (ROOT/'deploy/ttar-maintenance.service').read_text(),
             'config': {'database': '/var/lib/ttar/history.sqlite3', 'allowed_chat_id': state['allowed_chat_id'],
                        'function_id': state['function_id'], 'booking_schedule_enabled': True,

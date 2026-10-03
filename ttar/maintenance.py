@@ -16,6 +16,7 @@ from .work_context import tennis_snapshot
 from .telegram import redact
 
 STOP = threading.Event()
+RELOAD = threading.Event()
 LOG = logging.getLogger('ttar-maintenance')
 
 
@@ -176,18 +177,26 @@ def work_loop(config):
             if not op:
                 STOP.wait(1)
                 continue
-            if op['actor'] != OWNER_ID or op['chat_id'] != config['allowed_chat_id']:
+            if op['actor'] <= 0 or op['chat_id'] != config['allowed_chat_id']:
                 finish(store, op, 'failed', 'Нет доступа к /work.')
                 continue
             try:
                 def progress(message):
                     LOG.info('Work %s: %s', op['id'], message)
-                work_config = dict(config['work'], tennis_context=tennis_snapshot(store, op['chat_id']))
+                work_config = dict(config['work'], actor_id=op['actor'], tennis_context=tennis_snapshot(store, op['chat_id']))
                 result = run_work(json.loads(op['request'])['text'], op['id'], work_config, progress)
                 text = f"/work #{op['id']}: " + result['summary']
                 if result['status'] == 'done' and result.get('commit'):
                     text += '\nИзменения применены, проверки пройдены.'
-                finish(store, op, result['status'], text, result)
+                if result.get('controller_reload') and result['status'] == 'done':
+                    result['final_text'] = text
+                    with store.transaction():
+                        store.db.execute("UPDATE operations SET status='awaiting_reload',result=? WHERE id=?",
+                                         (json.dumps(result, ensure_ascii=False), op['id']))
+                    RELOAD.set()
+                    STOP.set()
+                else:
+                    finish(store, op, result['status'], text, result)
             except Exception as error:
                 LOG.warning('Work operation %s failed: %s', op['id'], type(error).__name__)
                 finish(store, op, 'failed', f"/work #{op['id']}: не удалось завершить задачу. Сбой исполнителя ({type(error).__name__}); детали сохранены на сервере.")
@@ -205,6 +214,14 @@ def main():
     client = CalendarClient(credentials['calendar_token'])
     store = Store(config['database'])
     recover(store)
+    for row in store.db.execute("SELECT * FROM operations WHERE status='awaiting_reload'").fetchall():
+        result = json.loads(row['result'])
+        marker = Path('/opt/ttar-control/commit')
+        if marker.exists() and marker.read_text().strip() == result.get('commit'):
+            finish(store, row, 'done', result['final_text'], result)
+    Path('/var/lib/ttar-release/controller-ready.json').write_text(json.dumps({
+        'pid': os.getpid(), 'commit': Path('/opt/ttar-control/commit').read_text().strip()
+        if Path('/opt/ttar-control/commit').exists() else None}))
     thread = threading.Thread(target=work_loop, args=(config,))
     thread.start()
     try:
@@ -238,3 +255,5 @@ if __name__ == '__main__':
     signal.signal(signal.SIGTERM, lambda *_: STOP.set())
     signal.signal(signal.SIGINT, lambda *_: STOP.set())
     main()
+    if RELOAD.is_set():
+        raise SystemExit(75)

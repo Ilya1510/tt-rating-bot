@@ -87,7 +87,7 @@ def main():
     call('setMyCommands', commands=[
         {'command': 'confirm', 'description': 'Подтвердить последний список партий'},
         {'command': 'stat', 'description': 'Последние N партий, по умолчанию 1000'},
-        {'command': 'work', 'description': 'Для Ильи: вопрос о теннисе или доработка'},
+        {'command': 'work', 'description': 'Вопрос о теннисе; доработки — только Илья'},
         {'command': 'create_booking', 'description': 'Для Ильи: забронировать зал'},
         {'command': 'cancel_booking', 'description': 'Для Ильи: отменить нашу бронь'}])
     print(json.dumps({'mode': state['ingress_mode'], 'function_id': function,
