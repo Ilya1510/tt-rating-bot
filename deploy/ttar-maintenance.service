@@ -5,7 +5,8 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=root
+# System services default to root. Explicit User=root with NoNewPrivileges
+# drops CAP_SETUID on this host and prevents runuser from dropping privileges.
 Group=root
 WorkingDirectory=/opt/ttar-control
 Environment=PYTHONUNBUFFERED=1

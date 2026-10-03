@@ -61,8 +61,8 @@ def _date(value):
 
 def _slot(start, end):
     first, last = _date(start), _date(end)
-    if not timedelta(0) < last - first <= timedelta(minutes=90):
-        raise ValueError('Длительность брони должна быть от 1 до 90 минут.')
+    if not timedelta(0) < last - first <= timedelta(minutes=150):
+        raise ValueError('Длительность брони должна быть от 1 до 150 минут.')
     return first, last
 
 

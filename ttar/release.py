@@ -20,6 +20,7 @@ import zipfile
 from pathlib import Path
 
 from .cloud_telegram import CloudTelegram
+from .booking_policy import load_policy
 
 BASE = 'https://serverless-functions.api.cloud.yandex.net/functions/v1'
 
@@ -116,9 +117,12 @@ def main(candidate, old_commit):
     old = cloud.live(settings['function_id'])
     commit = run(['git', '-c', 'core.hooksPath=/dev/null', '-C', str(root), 'rev-parse', 'HEAD']).decode().strip()
     live_root = Path('/opt/ttar')
+    policy = load_policy(root/'booking-policy.json')
+    policy_file = live_root/'booking-policy.json'
+    previous_policy = policy_file.read_bytes() if policy_file.exists() else None
     files = ['webhook.py', 'telegram.py', '__init__.py']
     changed_cloud = any((root/'ttar'/f).read_bytes() != (live_root/'ttar'/f).read_bytes() for f in files)
-    promoted = installed = False
+    promoted = installed = policy_installed = False
     try:
         if changed_cloud:
             tag = 'candidate-' + commit[:12]
@@ -135,6 +139,11 @@ def main(candidate, old_commit):
         backup.chmod(0o600)
         install_tree(root, live_root)
         installed = True
+        staged_policy = live_root/'booking-policy.next'
+        staged_policy.write_text(json.dumps(policy) + '\n')
+        staged_policy.chmod(0o644)
+        staged_policy.replace(policy_file)
+        policy_installed = True
         run(['systemctl', 'restart', 'ttar-worker.service'])
         if (root/'ttar/recognizer.py').read_bytes() != (live_root/'ttar.previous/recognizer.py').read_bytes():
             run(['systemctl', 'restart', 'ttar-ocr.service'])
@@ -148,6 +157,14 @@ def main(candidate, old_commit):
     except Exception as error:
         recovered = True
         try:
+            if policy_installed:
+                if previous_policy is None:
+                    policy_file.unlink()
+                else:
+                    restored = live_root/'booking-policy.restore'
+                    restored.write_bytes(previous_policy)
+                    restored.chmod(0o644)
+                    restored.replace(policy_file)
             if promoted:
                 cloud.tag(old['id'])
             if installed:

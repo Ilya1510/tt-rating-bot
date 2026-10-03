@@ -11,6 +11,7 @@ from pathlib import Path
 
 from .core import Store
 from .operations import MOSCOW, OWNER_ID, ROOM, schedule
+from .booking_policy import load_policy
 from .telegram import redact
 
 STOP = threading.Event()
@@ -210,7 +211,8 @@ def main():
         while not STOP.is_set():
             try:
                 if config.get('booking_schedule_enabled', True):
-                    schedule(store, config['allowed_chat_id'], datetime.now(MOSCOW))
+                    policy = load_policy('/opt/ttar/booking-policy.json')
+                    schedule(store, config['allowed_chat_id'], datetime.now(MOSCOW), policy['regular_minutes'])
                 op = claim(store)
                 if op:
                     automatic = op['actor'] == 0 and op['kind'] == 'book' and op['dedupe'].startswith('scheduled:')

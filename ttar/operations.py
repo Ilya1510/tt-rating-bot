@@ -88,13 +88,15 @@ def enqueue(store, command, text, actor, chat_id, dedupe, now=None):
     return f'Задача #{op} принята. Результат напишу в этот чат.', None
 
 
-def schedule(store, chat_id, now):
+def schedule(store, chat_id, now, duration=60):
     now = now.astimezone(MOSCOW)
     # No retrospective booking after a missed day; same-day recovery is safe.
     if now.weekday() not in (0, 4) or (now.hour, now.minute) < (19, 1):
         return False
     start = (now + timedelta(days=3)).replace(hour=19, minute=0, second=0, microsecond=0)
-    request = {'start': start.isoformat(), 'end': (start + timedelta(hours=1)).isoformat()}
+    if type(duration) is not int or not 1 <= duration <= 150:
+        raise ValueError('Invalid scheduled duration')
+    request = {'start': start.isoformat(), 'end': (start + timedelta(minutes=duration)).isoformat()}
     key = 'scheduled:' + start.date().isoformat()
     with store.transaction():
         cursor = store.db.execute('INSERT OR IGNORE INTO operations(dedupe,kind,actor,chat_id,request,created_at) VALUES (?,?,?,?,?,?)',

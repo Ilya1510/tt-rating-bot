@@ -78,3 +78,7 @@ known secrets to the built-in pattern filter. No diff is sent to Telegram.
 Smoke-test without a deployment: use a fresh job ID and request an inspection with
 no edits and an `unchanged` result. This still checks GitHub fetch, workspace
 isolation, Codex authentication and structured output.
+
+Regular booking duration is data in `booking-policy.json` (`regular_minutes`, 1–150). The trusted controller reloads it for each scheduler tick; the release helper validates and atomically installs it. Protected controller Python modules are not replaced by `/work`.
+
+The maintenance system unit deliberately omits `User=root`: on this host an explicit root user combined with `NoNewPrivileges` loses CAP_SETUID, which breaks `runuser`. Test the actual service path, not only a root shell.

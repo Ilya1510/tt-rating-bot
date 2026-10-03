@@ -152,5 +152,5 @@ def test_timezone_offsets_are_converted_not_truncated():
 def test_invalid_duration_rejected_before_network():
     api = API()
     with pytest.raises(ValueError):
-        CalendarClient(transport=api).create_booking(START, '2026-10-08T21:00:00+03:00', KEY, lambda _: None)
+        CalendarClient(transport=api).create_booking(START, '2026-10-08T21:31:00+03:00', KEY, lambda _: None)
     assert not api.calls
