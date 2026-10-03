@@ -2,7 +2,7 @@ import json
 import re
 import html
 
-from .core import balance_reached
+from .core import balance_reached, elo
 
 from .webhook import chat_of
 from .photo import fingerprints
@@ -12,6 +12,7 @@ from .operations import COMMANDS as OWNER_COMMANDS, enqueue as enqueue_operation
 ROSTER = [('М', 'Максим'), ('И', 'Илья'), ('Р', 'Рома'), ('В', 'Валя')]
 HELP = ('Пришли фото, проверь список и нажми «Подтвердить». Нужны 2 разных участника.\n'
         '/stat N — последние N партий. По умолчанию N = 1000.\n'
+        '/elo_chase — сколько побед подряд нужно Илье над Максом для обгона в Elo.\n'
         'Для Ильи:\n/work задача — изменить код бота.\n'
         '/create_booking ГГГГ-ММ-ДД ЧЧ:ММ [минуты] — забронировать зал.\n'
         '/cancel_booking ГГГГ-ММ-ДД [ЧЧ:ММ] — отменить нашу бронь.')
@@ -141,6 +142,28 @@ def statistics(store, window=1000):
     return text, None
 
 
+def elo_chase(store):
+    if store.setting('configured') != 'true':
+        raise ValueError('Модель рейтинга ещё не настроена')
+    ratings = []
+    for alias in ('И', 'М'):
+        pid = store.player(alias)
+        row = store.db.execute('SELECT rating FROM ratings WHERE player_id=?', (pid,)).fetchone()
+        ratings.append(row[0] if row else 1000.)
+    ilya, max_rating = ratings
+    wins = 0
+    k = float(store.setting('k'))
+    while ilya <= max_rating:
+        ilya, max_rating = elo(ilya, max_rating, 0, k)
+        wins += 1
+    if wins == 0:
+        return 'Илья уже выше Макса в Elo: дополнительных побед для обгона нужно 0.', None
+    return (f'Илье нужно побед подряд над Максом: {wins}, чтобы строго обогнать его в Elo.\n'
+            f'Текущий Elo: Илья {ratings[0]:.2f}, Макс {ratings[1]:.2f}.\n'
+            f'После этих побед: Илья {ilya:.2f}, Макс {max_rating:.2f}.\n'
+            'Расчёт предполагает, что между победами других партий не будет.', None)
+
+
 def split_message(text, limit=3900):
     parts, lines = [], []
     for line in text.splitlines():
@@ -258,6 +281,8 @@ class Bot:
         args = text.split(maxsplit=1)[1] if len(text.split(maxsplit=1)) > 1 else ''
         if command == '/stat':
             return statistics(self.store, parse_window(args, int(self.store.setting('stats_window'))))
+        if command == '/elo_chase':
+            return elo_chase(self.store)
         if command == '/confirm':
             if args:
                 pid, revision = map(int, args.split())

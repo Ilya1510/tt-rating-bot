@@ -4,8 +4,8 @@ from PIL import Image
 
 import pytest
 
-from ttar.bot import Bot, matrix_values
-from ttar.core import Store
+from ttar.bot import Bot, matrix_values, elo_chase
+from ttar.core import Store, elo
 from ttar.telegram import redact
 from ttar.webhook import accept, accept_trigger, poll_updates
 from test_core import raw, approve
@@ -96,6 +96,57 @@ class FakeTelegram:
         return user_id == 9
     def member(self, chat_id, user_id):
         return user_id in (9, 42, 43)
+
+
+@pytest.mark.parametrize('ratings,k,count', [
+    ((1000, 1000), 32, 1), ((1100, 1000), 32, 0),
+    ((1000, 1100), 32, 3), ((1000, 1400), 200, 2),
+    ((1000.1, 1000.2), 32, 1),
+])
+def test_elo_chase_minimum_wins_without_mutations(tmp_path, ratings, k, count):
+    s = Store(tmp_path/'test.sqlite3', k=k)
+    s.db.execute("UPDATE settings SET value='true' WHERE key='configured'")
+    for alias, rating in zip(('И', 'М'), ratings):
+        pid = s.player(alias, create=True)
+        s.db.execute('INSERT INTO ratings VALUES (?,?,0,0)', (pid, rating))
+    before = list(s.db.iterdump())
+    response, keyboard = elo_chase(s)
+    assert f': {count}' in response or f'нужно {count}' in response
+    assert keyboard is None
+    assert list(s.db.iterdump()) == before
+    a, b = ratings
+    for _ in range(count):
+        assert a <= b
+        a, b = elo(a, b, 0, k)
+    assert a > b
+
+
+def test_elo_chase_reply_is_deduplicated_and_uses_initial_rating(tmp_path):
+    s = Store(tmp_path/'test.sqlite3')
+    s.db.execute("UPDATE settings SET value='true' WHERE key='configured'")
+    for alias in ('И', 'М'):
+        s.player(alias, create=True)
+    bot = Bot(s, FakeTelegram(), lambda _: pytest.fail('OCR called'), -123)
+    s.ingest({'update_id': 1, 'message': {'chat': {'id': -123},
+              'from': {'id': 42}, 'text': '/elo_chase'}})
+    job = s.claim()
+    bot.handle(job)
+    bot.handle(job)
+    replies = s.db.execute('SELECT * FROM outbox').fetchall()
+    assert len(replies) == 1
+    assert replies[0]['method'] == 'sendMessage'
+    assert 'побед подряд над Максом: 1' in json.loads(replies[0]['payload'])['text']
+    assert s.db.execute('SELECT count(*) FROM games').fetchone()[0] == 0
+    assert s.db.execute('SELECT count(*) FROM ratings').fetchone()[0] == 0
+
+
+def test_elo_chase_requires_configured_model_and_known_players(tmp_path):
+    s = Store(tmp_path/'test.sqlite3')
+    with pytest.raises(ValueError, match='не настроена'):
+        elo_chase(s)
+    s.db.execute("UPDATE settings SET value='true' WHERE key='configured'")
+    with pytest.raises(ValueError, match='Неизвестный игрок'):
+        elo_chase(s)
 
 
 def test_full_photo_draft_confirm_pair_amend(tmp_path):
