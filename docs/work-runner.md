@@ -59,7 +59,7 @@ contains a fresh archive of origin/main and no deploy keys or production data.
 The account needs its own Codex authentication; the model process can access that
 account's authentication, which is never included in the workspace or reports.
 
-Only Python bot modules, Python tests, README, and Markdown docs may change.
+Only Python bot modules, Python tests, README, Markdown docs, and `booking-policy.json` may change.
 The runner, maintenance controller, release helper, dependencies, infrastructure,
 links and executable file modes are excluded. Requests requiring those changes
 report that automatic publication is unsupported. The test unit has no network,
@@ -80,5 +80,10 @@ no edits and an `unchanged` result. This still checks GitHub fetch, workspace
 isolation, Codex authentication and structured output.
 
 Regular booking duration is data in `booking-policy.json` (`regular_minutes`, 1–150). The trusted controller reloads it for each scheduler tick; the release helper validates and atomically installs it. Protected controller Python modules are not replaced by `/work`.
+
+The current owner-approved policy is 150 minutes: one regular booking request
+for 19:00–21:30 Europe/Moscow, despite the room's documented 90-minute limit.
+If the room rejects it, report the rejection without shortening or splitting
+the request.
 
 The maintenance system unit deliberately omits `User=root`: on this host an explicit root user combined with `NoNewPrivileges` loses CAP_SETUID, which breaks `runuser`. Test the actual service path, not only a root shell.
