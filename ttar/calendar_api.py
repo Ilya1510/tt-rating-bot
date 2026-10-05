@@ -19,6 +19,7 @@ BASE_URL = 'https://cloud-api.yandex.net/v1/calendar'
 ROOM = 'conf_mm_5_15@yandex-team.ru'
 TIMEZONE = 'Europe/Moscow'
 SUMMARY = 'Настольный теннис'
+PLAYERS = ('klim-roma@yandex-team.ru', 'polyanskiy-mn@yandex-team.ru')
 
 
 @dataclass(frozen=True)
@@ -83,12 +84,13 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 class CalendarClient:
-    def __init__(self, token=None, timeout=20, transport=None):
+    def __init__(self, token=None, timeout=20, transport=None, ownership_lookup=None):
         self._token = token or os.environ.get('YANDEX_CALENDAR_TOKEN')
         if not self._token and transport is None:
             raise CalendarError(401)
         self.timeout = timeout
         self.transport = transport
+        self.ownership_lookup = ownership_lookup
 
     def _call(self, method, path, body=None, query=None):
         if self.transport is not None:
@@ -143,6 +145,25 @@ class CalendarClient:
     def participants(self, event_id):
         return self._items('GET', self._path(event_id) + '/participants')
 
+    def _invite_players(self, event_id):
+        # The create endpoint may ignore participants. Use the dedicated endpoint
+        # once, after persisting the event ID; verification never retries writes.
+        present = {p.get('email', '').casefold() for p in self.participants(event_id)}
+        missing = [email for email in PLAYERS if email not in present]
+        if missing:
+            self._call('POST', self._path(event_id) + '/participants',
+                       {'items': [{'email': email, 'participation_type': 'ATTENDEE'} for email in missing]})
+            present = {p.get('email', '').casefold() for p in self.participants(event_id)}
+            if not set(PLAYERS) <= present:
+                raise CalendarError()
+
+    def _owned_event(self, event, booking_key):
+        # Legacy events may still carry a marker; new ones use the durable ID
+        # binding in SQLite and keep their description free of technical text.
+        return bool((self.ownership_lookup and
+                     self.ownership_lookup(event.get('event_id'), booking_key)) or
+                    _marker(booking_key) in str(event.get('description', '')).splitlines())
+
     def list_events(self, start, end):
         first, last = _slot(start, end)
         return self._items('GET', '/events', query={'from': first.isoformat(), 'to': last.isoformat()})
@@ -160,10 +181,9 @@ class CalendarClient:
             return False
 
     def _find_existing(self, start, end, booking_key):
-        marker = _marker(booking_key)
         found = []
         for event in self.list_events(start, end):
-            if marker not in str(event.get('description', '')).splitlines():
+            if not self._owned_event(event, booking_key):
                 continue
             if not self._same_slot(event, start, end) or event.get('relation_type') != 'ORGANIZER' or event.get('repetition'):
                 raise ValueError('Существующая встреча не соответствует этой заявке.')
@@ -200,7 +220,7 @@ class CalendarClient:
         except CalendarError as error:
             return BookingResult('unverifiable', reason=str(error))
         body = {'summary': SUMMARY, 'start': _edt(start), 'end': _edt(end),
-                'description': _marker(booking_key), 'location': ROOM,
+                'description': '', 'location': ROOM,
                 'participants': [{'email': ROOM, 'participation_type': 'ATTENDEE'}],
                 'personal_settings': {'availability': 'BUSY'}}
         try:
@@ -214,6 +234,11 @@ class CalendarClient:
             return BookingResult('uncertain', reason='Календарь не вернул ID. Повторное создание запрещено; нужна сверка.')
         # Persistence failure must escape: the caller's started attempt remains.
         save_event(event_id)
+        try:
+            self._invite_players(event_id)
+        except CalendarError:
+            return BookingResult('unverifiable', event_id, event_url(event_id),
+                                 'Встреча создана, но приглашения Роме и Максиму пока не подтверждены API.')
         return self.verify_booking(event_id, start, end)
 
     def verify_booking(self, event_id, start, end):
@@ -255,7 +280,7 @@ class CalendarClient:
                     return BookingResult('cancelled', event_id, url, 'Встреча уже отсутствует.')
                 raise
             if (event.get('relation_type') != 'ORGANIZER' or event.get('repetition')
-                    or _marker(booking_key) not in str(event.get('description', '')).splitlines()
+                    or not self._owned_event(event, booking_key)
                     or not self._same_slot(event, start, end)):
                 raise ValueError('Отмена разрешена только для собственной одиночной встречи этой заявки.')
             self._call('DELETE', self._path(event_id))

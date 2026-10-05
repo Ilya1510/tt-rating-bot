@@ -211,8 +211,10 @@ def main():
     lock = open('/var/lib/ttar-release/maintenance.lock', 'a')
     fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     credentials = json.loads((Path(os.environ['CREDENTIALS_DIRECTORY'])/'maintenance.json').read_text())
-    client = CalendarClient(credentials['calendar_token'])
     store = Store(config['database'])
+    client = CalendarClient(credentials['calendar_token'], ownership_lookup=lambda event_id, key:
+        store.db.execute('SELECT 1 FROM bookings WHERE event_id=? AND booking_key=?',
+                         (event_id, key)).fetchone() is not None)
     recover(store)
     for row in store.db.execute("SELECT * FROM operations WHERE status='awaiting_reload'").fetchall():
         result = json.loads(row['result'])
