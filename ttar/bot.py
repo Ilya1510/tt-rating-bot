@@ -78,24 +78,26 @@ def game_lines(store, pid, *, budget=False, include_elo=True):
             na = f'<u>{na}</u>'
         else:
             nb = f'<u>{nb}</u>'
-        change = ''
+        change_a = change_b = ''
         if photo['status'] == 'draft':
             before_a, before_b = ratings.get(a, 1000.), ratings.get(b, 1000.)
             ratings[a], ratings[b] = elo(before_a, before_b, 0 if sa > sb else 1,
                                        float(store.setting('k')))
             da, db = ratings[a] - before_a, ratings[b] - before_b
-            change = f' · Elo: {html.escape(store.name(a))} {da:+.2f}, {html.escape(store.name(b))} {db:+.2f}'
+            change_a, change_b = f' {da:+.0f}', f' {db:+.0f}'
         elif i - 1 in recorded and recorded[i - 1]['active']:
             row = recorded[i - 1]
             da = row['rating_a_after'] - row['rating_a_before']
             db = row['rating_b_after'] - row['rating_b_before']
-            change = f' · Elo: {html.escape(store.name(a))} {da:+.2f}, {html.escape(store.name(b))} {db:+.2f}'
+            change_a, change_b = f' {da:+.0f}', f' {db:+.0f}'
         if budget:
             # A single Elo change is bounded by K. Reserve the same width for
             # every state, even if ratings change while the photo is reviewed.
-            width = max(len(f'{float(store.setting("k")):+.2f}'), len('-0.00'))
-            change = f' · Elo: {html.escape(store.name(a))} ' + '0' * width + f', {html.escape(store.name(b))} ' + '0' * width
-        lines.append(f'{i}. {na} — {nb} {sa}:{sb}{change if include_elo else ""}')
+            width = max(len(f'{float(store.setting("k")):+.0f}'), len('-0'))
+            change_a = change_b = ' ' + '0' * width
+        if not include_elo:
+            change_a = change_b = ''
+        lines.append(f'{i}. {na}{change_a} — {nb}{change_b} {sa}:{sb}')
     return lines
 
 

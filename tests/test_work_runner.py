@@ -129,8 +129,8 @@ def test_validate_applied_patch_rejects_symlinks_and_protected_files(tmp_path):
     assert 'ttar/work_runner.py' in work.validate_changes(repo, base)
 
 
-@pytest.mark.parametrize('test_fails,deploy_fails', [(True, False), (False, False), (False, True)])
-def test_pipeline_tests_before_push_before_deploy(tmp_path, monkeypatch, test_fails, deploy_fails):
+@pytest.mark.parametrize('failures,deploy_fails', [(3, False), (1, False), (2, False), (0, False), (0, True)])
+def test_pipeline_tests_before_push_before_deploy(tmp_path, monkeypatch, failures, deploy_fails):
     release, home = tmp_path/'release', tmp_path/'code'
     release.mkdir()
     home.mkdir()
@@ -139,11 +139,19 @@ def test_pipeline_tests_before_push_before_deploy(tmp_path, monkeypatch, test_fa
     work.git(repo, 'update-ref', 'refs/remotes/origin/main', base)
     real_command, real_git = work.command, work.git
     events = []
+    prompts = []
 
     def fake_command(argv, **kwargs):
         if argv[0] == 'runuser' and 'exec' in argv:
             workspace = Path(argv[argv.index('-C') + 1])
-            (workspace/'ttar'/'core.py').write_text('VALUE = 2\n')
+            if argv[argv.index('--sandbox') + 1] == 'workspace-write':
+                prompts.append(kwargs['data'].decode())
+                assert Path(argv[argv.index('-o') + 1]).read_text() == ''
+                (workspace/'ttar'/'core.py').write_text(f'VALUE = {len(prompts) + 1}\n')
+                if len(prompts) == 1:
+                    (workspace/'ttar'/'first_attempt.py').write_text('OLD = True\n')
+                elif (workspace/'ttar'/'first_attempt.py').exists():
+                    (workspace/'ttar'/'first_attempt.py').unlink()
             Path(argv[argv.index('-o') + 1]).write_text(json.dumps(
                 {'status': 'changed', 'summary': 'Изменено', 'technical': 'Проверено'}))
             return b''
@@ -152,8 +160,12 @@ def test_pipeline_tests_before_push_before_deploy(tmp_path, monkeypatch, test_fa
             assert 'PrivateNetwork=yes' in argv
             assert 'ProtectSystem=strict' in argv
             assert 'PYTEST_DISABLE_PLUGIN_AUTOLOAD=1' in argv
-            if test_fails:
-                raise work.WorkError('Тесты не прошли.')
+            candidate = Path(argv[argv.index('--working-directory') + 1])
+            assert (candidate/'ttar'/'core.py').read_text() == f'VALUE = {len(prompts) + 1}\n'
+            assert (candidate/'ttar'/'first_attempt.py').exists() == (len(prompts) == 1)
+            if events.count('test') <= failures:
+                raise work.CommandFailure('systemd-run', 1,
+                    'FAILED tests/test_score.py::test_score - AssertionError\nprivate-secret', '')
             return b'1 passed'
         if argv[0] == '/trusted/deploy':
             events.append('deploy')
@@ -179,12 +191,34 @@ def test_pipeline_tests_before_push_before_deploy(tmp_path, monkeypatch, test_fa
     monkeypatch.setattr(os, 'chown', lambda *a: None)
     result = work.run_work('Измени метрику', 30,
                           {'release_root': str(release), 'code_home': str(home),
-                           'deploy_command': ['/trusted/deploy'], 'model': 'example-model', 'actor_id': work.OWNER_ID}, lambda s: None)
-    assert events == (['test'] if test_fails else ['test', 'push', 'deploy'])
-    assert result['status'] == ('failed' if test_fails else 'uncertain' if deploy_fails else 'done')
-    if not test_fails:
+                           'deploy_command': ['/trusted/deploy'], 'model': 'example-model', 'actor_id': work.OWNER_ID,
+                           'redact_values': ['private-secret']}, lambda s: None)
+    exhausted = failures >= work.MAX_TEST_ATTEMPTS
+    attempts = min(failures + 1, work.MAX_TEST_ATTEMPTS)
+    assert events == ['test'] * attempts + ([] if exhausted else ['push', 'deploy'])
+    assert len(prompts) == attempts
+    for prompt in prompts[1:]:
+        assert 'FAILED tests/test_score.py::test_score' in prompt
+        assert 'private-secret' not in prompt
+        assert 'Измени метрику' in prompt
+    assert result['status'] == ('failed' if exhausted else 'uncertain' if deploy_fails else 'done')
+    if exhausted:
+        assert 'после 3 попыток' in result['summary'] and 'test_score' in result['summary']
+    else:
         assert result['commit']
         assert (release/'work-30-deploy.json').exists()
+
+
+@pytest.mark.parametrize('code,stdout', [(203, ''), (1, ''), (5, 'no tests ran'), (1, 'Unit start failed')])
+def test_infrastructure_errors_are_not_treated_as_code_repair(code, stdout):
+    with pytest.raises(work.WorkError, match='изолированном окружении'):
+        work.test_feedback(work.CommandFailure('systemd-run', code, stdout, 'internal error'))
+
+
+def test_feedback_retains_collection_errors_but_masks_secrets():
+    error = work.CommandFailure('systemd-run', 2, 'ERROR tests/test_score.py - ImportError secret-value', '')
+    feedback = work.test_feedback(error, ['secret-value'])
+    assert 'ERROR tests/test_score.py' in feedback and 'secret-value' not in feedback
 
 
 @pytest.mark.parametrize('decision,status', [('unchanged', 'answered'), ('changed', 'failed')])

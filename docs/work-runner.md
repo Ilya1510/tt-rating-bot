@@ -34,6 +34,16 @@ The service retains separate ttar-code and root release identities. Root owns
 The code workspace never receives those keys. The test unit has no network,
 production database, credentials or Codex authentication.
 
+The editor uses `/opt/ttar/.venv/bin/python -m pytest`, which includes the test
+dependencies. The controller independently tests a root-owned candidate. Failed
+tests and collection errors return bounded, redacted stdout/stderr to the editor
+in the same workspace, with the original request. There are at most three full
+test attempts (two repairs). Each attempt rebuilds and revalidates the candidate
+from the original base; only the final passing tree can be pushed and deployed.
+Infrastructure startup failures, timeouts, pushes and deployments are never
+retried by this loop. Exhausted repairs produce one final failure naming the
+remaining tests. Progress and raw diagnostics stay out of Telegram.
+
 Optional deploy/owner_apply.py is an owner-authorized deployment hook, invoked
 after tests with candidate directory and previous commit arguments under root.
 It must be idempotent, preserve data and avoid printing secrets. It is unnecessary

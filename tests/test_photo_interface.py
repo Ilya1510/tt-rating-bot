@@ -78,7 +78,7 @@ def test_four_columns_use_per_game_pair_and_ignore_totals(store):
         proposal = json.loads(store.photo(pid)['proposal'])
         assert proposal == [[store.player('М'),store.player('Р'),11,5], [store.player('И'),store.player('В'),8,11], [store.player('М'),store.player('И'),21,10]]
         text, keyboard = draft(store, pid)
-    assert '1. <u>Максим</u> — Рома 11:5' in text and '2. Илья — <u>Валя</u> 8:11' in text
+    assert '1. <u>Максим</u> +16 — Рома -16 11:5' in text and '2. Илья -16 — <u>Валя</u> +16 8:11' in text
     assert 'Требуется' not in text and 'Блок' not in text and '[game]' not in text and '3:1' not in text
     assert 'нажми «Подтвердить»' in text and keyboard['inline_keyboard'][0][0]['text'] == 'Подтвердить · 0/2'
 
@@ -129,15 +129,18 @@ def test_photo_elo_changes_are_sequential_and_confirmation_uses_saved_values(sto
         pid, _ = store.put_photo(-123, 10, 'elo', 'elo-hash', 100, 42, raw())
         store.fix_draft(pid, [['М', 'И', 11, 8], ['И', 'М', 11, 9]], 42, False)
         before, _ = draft(store, pid)
-        assert 'Elo: Максим +16.00, Илья -16.00' in before
-        assert 'Elo: Илья +17.47, Максим -17.47' in before
+        assert '<u>Максим</u> +16 — Илья -16 11:8' in before
+        assert '<u>Илья</u> +17 — Максим -17 11:9' in before
+        for line in before.splitlines()[:2]:
+            assert line.count('Максим') == line.count('Илья') == 1
+            assert 'Elo' not in line
         assert 'Elo рассчитан предварительно' in before
         assert store.db.execute('SELECT count(*) FROM games').fetchone()[0] == 0
         approve(store, pid, 2, 42, True)
         after, _ = draft(store, pid)
     assert 'предварительно' not in after
-    assert 'Elo: Максим +16.00, Илья -16.00' in after
-    assert 'Elo: Илья +17.47, Максим -17.47' in after
+    assert '<u>Максим</u> +16 — Илья -16 11:8' in after
+    assert '<u>Илья</u> +17 — Максим -17 11:9' in after
 
 
 def test_old_photo_elo_preview_ignores_later_games(store):
@@ -145,7 +148,7 @@ def test_old_photo_elo_preview_ignores_later_games(store):
         add_games(store, [['М', 'И', 11, 8]])
         pid, _ = store.put_photo(-123, 9, 'old-elo', 'old-elo-hash', 99, 42, raw())
         preview, _ = draft(store, pid)
-        assert 'Максим +16.00, Илья -16.00' in preview
+        assert '<u>Максим</u> +16 — Илья -16 11:8' in preview
         approve(store, pid, 1, 42, True)
         confirmed, _ = draft(store, pid)
-    assert 'Elo: Максим +16.00, Илья -16.00' in confirmed
+    assert '<u>Максим</u> +16 — Илья -16 11:8' in confirmed

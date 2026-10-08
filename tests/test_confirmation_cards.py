@@ -136,10 +136,10 @@ def test_winner_underlined_and_all_200_games_preserved(store):
         queue_draft(store,pid,'long')
     pages=[json.loads(r[0]) for r in store.db.execute('SELECT payload FROM outbox ORDER BY id')]
     text='\n'.join(page['text'] for page in pages)
-    assert '1. <u>Максим</u> — Илья 11:8' in text
-    assert '2. Максим — <u>Илья</u> 8:11' in text
-    assert '3. <u>Рома</u> — Валя 11:8' in text
-    assert '4. Рома — <u>Валя</u> 8:11' in text
+    assert '1. <u>Максим</u> +16 — Илья -16 11:8' in text
+    assert '2. Максим -17 — <u>Илья</u> +17 8:11' in text
+    assert '3. <u>Рома</u> +16 — Валя -16 11:8' in text
+    assert '4. Рома -17 — <u>Валя</u> +17 8:11' in text
     assert len(pages)>1 and text.count('<u>') == text.count('</u>') == 200
     for page in pages:
         assert page['parse_mode']=='HTML' and len(page['text'])<=3900
@@ -267,7 +267,10 @@ def test_elo_html_and_long_names_fit_without_splitting_games(store):
         store.fix_draft(pid, [['М','И',11,8]] * 20, 42, False)
         pages, _ = draft_pages(store, pid)
     assert all(len(page) <= 3900 for page in pages)
-    assert sum(page.count(' · Elo:') for page in pages) == 20
+    lines = [line for page in pages for line in page.split('\n\n')[0].splitlines()]
+    assert len(lines) == 20
+    assert all(line.count('&lt;') == line.count('&amp;') == 60 for line in lines)
+    assert all('Elo' not in line and ' — ' in line for line in lines)
     assert all(page.count('<u>') == page.count('</u>') for page in pages)
 
 
