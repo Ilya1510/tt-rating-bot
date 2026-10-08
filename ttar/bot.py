@@ -44,14 +44,33 @@ def draft_footer(store, pid):
             text += f' Подтвердили: {votes}/2.'
     else:
         text = f'Подтвердили: {votes}/2.\nЕсли всё верно, нажми «Подтвердить» ниже. Нужны 2 разных участника.'
+        if games:
+            text += '\nElo рассчитан предварительно; будет учтён после подтверждения.'
         if not games:
             text = 'Завершённых партий на фото не нашёл.\n\n' + text
     buttons.extend(stats_button(store)['inline_keyboard'])
     return text, {'inline_keyboard': buttons}
 
 
-def game_lines(store, pid):
-    games = json.loads(store.photo(pid)['proposal'])
+def game_lines(store, pid, *, budget=False, include_elo=True):
+    photo = store.photo(pid)
+    games = json.loads(photo['proposal'])
+    recorded = {row['ordinal']: row for row in store.db.execute(
+        'SELECT * FROM games WHERE photo_id=?', (pid,))}
+    ratings = {}
+    if photo['status'] == 'draft':
+        # Replay only earlier confirmed games: an old photo can be submitted
+        # after newer games have already affected the current ratings.
+        for row in store.db.execute(
+                'SELECT g.*, p.message_id FROM games g JOIN photos p ON p.id=g.photo_id '
+                'WHERE g.active=1 ORDER BY g.occurred_at,p.message_id,g.ordinal,g.id'):
+            if (row['occurred_at'], row['message_id'], row['photo_id']) >= (
+                    photo['occurred_at'], photo['message_id'], pid):
+                continue
+            a, b = row['a'], row['b']
+            ratings[a], ratings[b] = elo(ratings.get(a, 1000.), ratings.get(b, 1000.),
+                                       0 if row['score_a'] > row['score_b'] else 1,
+                                       float(store.setting('k')))
     lines = []
     for i, (a, b, sa, sb) in enumerate(games, 1):
         na, nb = html.escape(store.name(a)), html.escape(store.name(b))
@@ -59,7 +78,24 @@ def game_lines(store, pid):
             na = f'<u>{na}</u>'
         else:
             nb = f'<u>{nb}</u>'
-        lines.append(f'{i}. {na} — {nb} {sa}:{sb}')
+        change = ''
+        if photo['status'] == 'draft':
+            before_a, before_b = ratings.get(a, 1000.), ratings.get(b, 1000.)
+            ratings[a], ratings[b] = elo(before_a, before_b, 0 if sa > sb else 1,
+                                       float(store.setting('k')))
+            da, db = ratings[a] - before_a, ratings[b] - before_b
+            change = f' · Elo: {html.escape(store.name(a))} {da:+.2f}, {html.escape(store.name(b))} {db:+.2f}'
+        elif i - 1 in recorded and recorded[i - 1]['active']:
+            row = recorded[i - 1]
+            da = row['rating_a_after'] - row['rating_a_before']
+            db = row['rating_b_after'] - row['rating_b_before']
+            change = f' · Elo: {html.escape(store.name(a))} {da:+.2f}, {html.escape(store.name(b))} {db:+.2f}'
+        if budget:
+            # A single Elo change is bounded by K. Reserve the same width for
+            # every state, even if ratings change while the photo is reviewed.
+            width = max(len(f'{float(store.setting("k")):+.2f}'), len('-0.00'))
+            change = f' · Elo: {html.escape(store.name(a))} ' + '0' * width + f', {html.escape(store.name(b))} ' + '0' * width
+        lines.append(f'{i}. {na} — {nb} {sa}:{sb}{change if include_elo else ""}')
     return lines
 
 
@@ -70,10 +106,17 @@ def draft(store, pid):
 
 
 def draft_pages(store, pid):
-    # Reserve space for the changing footer so voting cannot move game rows
-    # between messages near Telegram's length limit.
+    # Boundaries depend on names/scores and maximum delta width, never on votes
+    # or the current rating. Never split a game line or its HTML tags.
     lines = game_lines(store, pid)
-    pages = split_message('\n'.join(lines), limit=3700) if lines else ['']
+    pages, current, size = [], [], 0
+    for line, reserve in zip(lines, game_lines(store, pid, budget=True)):
+        if current and size + len(reserve) + 1 > 3500:
+            pages.append('\n'.join(current))
+            current, size = [], 0
+        current.append(line)
+        size += len(reserve) + 1
+    pages.append('\n'.join(current))
     footer, keyboard = draft_footer(store, pid)
     pages[-1] = (pages[-1] + '\n\n' + footer).lstrip('\n')
     return pages, keyboard
@@ -83,10 +126,10 @@ def queue_draft(store, pid, key):
     pages, keyboard = draft_pages(store, pid)
     photo = store.photo(pid)
     for i, page in enumerate(pages):
-        payload = {'chat_id': photo['chat_id'], 'text': page, 'parse_mode': 'HTML'}
+        payload = {'chat_id': photo['chat_id'], 'text': page, 'parse_mode': 'HTML',
+                   '_draft_id': pid, '_draft_revision': photo['revision'], '_draft_page': i}
         if i == len(pages) - 1:
-            payload.update(reply_markup=keyboard,
-                           _draft_id=pid, _draft_revision=photo['revision'])
+            payload.update(reply_markup=keyboard)
         store.send(f'{key}:{i}', 'sendMessage', payload)
 
 
@@ -96,8 +139,20 @@ def card_update(store, card):
         text, keyboard = 'Список обновлён. Подтверди последний ответ бота.', stats_button(store)
     else:
         pages, keyboard = draft_pages(store, card['photo_id'])
-        text = pages[-1]
-    # Only the final message carries the vote button for a long list.
+        if card['kind'] == 'text':
+            # Cards sent before Elo support only registered their last page.
+            # Preserve their original boundaries; new cards track every page.
+            lines = game_lines(store, card['photo_id'], include_elo=False)
+            pages = split_message('\n'.join(lines), limit=3700) if lines else ['']
+            footer, keyboard = draft_footer(store, card['photo_id'])
+            pages[-1] = (pages[-1] + '\n\n' + footer).lstrip('\n')
+        index = int(card['kind'].split(':')[1]) if card['kind'].startswith('text:') else len(pages) - 1
+        if index >= len(pages):
+            text, keyboard = 'Список обновлён.', {'inline_keyboard': []}
+        else:
+            text = pages[index]
+            if index != len(pages) - 1:
+                keyboard = {'inline_keyboard': []}
     text = split_message(text)[-1]
     return 'editMessageText', {
         'chat_id': card['chat_id'], 'message_id': card['message_id'], 'text': text,

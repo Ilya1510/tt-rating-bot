@@ -127,6 +127,7 @@ def command(argv, *, cwd=None, data=None, env=None, timeout=180):
                 trusted_directory(diagnostics)
                 import uuid
                 detail = {'executable': Path(argv[0]).name, 'exit_code': run.returncode,
+                          'stdout': redact(run.stdout.decode(errors='replace'), limit=8000),
                           'stderr': redact(run.stderr.decode(errors='replace'), limit=8000)}
                 target = diagnostics/(uuid.uuid4().hex + '.json')
                 with target.open('x') as stream:

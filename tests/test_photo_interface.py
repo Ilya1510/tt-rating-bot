@@ -122,3 +122,30 @@ def test_long_game_list_is_never_silently_truncated():
     chunks=split_message(text)
     assert '\n'.join(chunks) == text and all(len(part)<=3900 for part in chunks)
     assert chunks[-1].endswith('Нажми «Подтвердить».')
+
+
+def test_photo_elo_changes_are_sequential_and_confirmation_uses_saved_values(store):
+    with store.transaction():
+        pid, _ = store.put_photo(-123, 10, 'elo', 'elo-hash', 100, 42, raw())
+        store.fix_draft(pid, [['М', 'И', 11, 8], ['И', 'М', 11, 9]], 42, False)
+        before, _ = draft(store, pid)
+        assert 'Elo: Максим +16.00, Илья -16.00' in before
+        assert 'Elo: Илья +17.47, Максим -17.47' in before
+        assert 'Elo рассчитан предварительно' in before
+        assert store.db.execute('SELECT count(*) FROM games').fetchone()[0] == 0
+        approve(store, pid, 2, 42, True)
+        after, _ = draft(store, pid)
+    assert 'предварительно' not in after
+    assert 'Elo: Максим +16.00, Илья -16.00' in after
+    assert 'Elo: Илья +17.47, Максим -17.47' in after
+
+
+def test_old_photo_elo_preview_ignores_later_games(store):
+    with store.transaction():
+        add_games(store, [['М', 'И', 11, 8]])
+        pid, _ = store.put_photo(-123, 9, 'old-elo', 'old-elo-hash', 99, 42, raw())
+        preview, _ = draft(store, pid)
+        assert 'Максим +16.00, Илья -16.00' in preview
+        approve(store, pid, 1, 42, True)
+        confirmed, _ = draft(store, pid)
+    assert 'Elo: Максим +16.00, Илья -16.00' in confirmed

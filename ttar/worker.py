@@ -52,6 +52,7 @@ def flush_outbox(store, telegram):
     payload = json.loads(row['payload'])
     draft_id = payload.pop('_draft_id', None)
     revision = payload.pop('_draft_revision', None)
+    page = payload.pop('_draft_page', None)
     method = row['method']
     if method == 'updateDraftCard':
         # Resolve the current count when sending, including delayed retries.
@@ -74,7 +75,8 @@ def flush_outbox(store, telegram):
     with store.transaction():
         store.db.execute("UPDATE outbox SET status='sent' WHERE id=?", (row['id'],))
         if draft_id and isinstance(result, dict) and result.get('message_id'):
-            store.register_card(draft_id, revision, payload['chat_id'], result['message_id'], 'text')
+            store.register_card(draft_id, revision, payload['chat_id'], result['message_id'],
+                                'text' if page is None else f'text:{page}')
             if store.vote_count(draft_id) or store.photo(draft_id)['revision'] != revision:
                 store.update_cards(draft_id, f"sent:{row['id']}")
     return True

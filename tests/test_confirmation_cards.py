@@ -161,12 +161,49 @@ def test_counter_changes_never_move_games_between_messages(store):
     pid=photo(store)
     for count in range(100,201):
         proposal=[[store.player('М'),store.player('И'),11,8]] * count
-        store.db.execute('UPDATE photos SET proposal=?,status=? WHERE id=?',(json.dumps(proposal),'draft',pid))
-        before,_=draft_pages(store,pid)
-        store.db.execute("UPDATE photos SET status='confirmed' WHERE id=?",(pid,))
-        after,_=draft_pages(store,pid)
+        with store.transaction():
+            store.db.execute('DELETE FROM games WHERE photo_id=?', (pid,))
+            store.db.execute('DELETE FROM confirm_votes WHERE photo_id=?', (pid,))
+            store.db.execute('UPDATE photos SET proposal=?,status=? WHERE id=?',(json.dumps(proposal),'draft',pid))
+            before,_=draft_pages(store,pid)
+            assert not store.confirm(pid, 1, 42, True)
+            voted,_=draft_pages(store,pid)
+            assert store.confirm(pid, 1, 43, True)
+            after,_=draft_pages(store,pid)
         assert len(before)==len(after)
         assert [page.split('\n\n')[0] for page in before]==[page.split('\n\n')[0] for page in after]
+        assert [page.split('\n\n')[0] for page in before]==[page.split('\n\n')[0] for page in voted]
+
+
+def test_every_page_is_registered_and_updated_after_confirmation(store):
+    pid = photo(store)
+    with store.transaction():
+        store.fix_draft(pid, [['М','И',11,8]] * 200, 42, False)
+        queue_draft(store, pid, 'elo-pages')
+    class Fake:
+        def __init__(self): self.calls = []
+        def call(self, method, **payload):
+            self.calls.append((method, payload))
+            assert not any(k.startswith('_draft') for k in payload)
+            return {'message_id': len(self.calls)} if method == 'sendMessage' else True
+    tg = Fake()
+    while flush_outbox(store, tg): pass
+    sent = list(tg.calls)
+    assert len(sent) > 1
+    assert store.db.execute('SELECT count(*) FROM photo_cards').fetchone()[0] == len(sent)
+    store.confirm(pid, 2, 42, True)
+    store.confirm(pid, 2, 43, True)
+    store.update_cards(pid, 'elo-confirmed')
+    while flush_outbox(store, tg): pass
+    edits = tg.calls[len(sent):]
+    assert len(edits) == len(sent)
+    for index, ((_, original), (method, updated)) in enumerate(zip(sent, edits)):
+        assert method == 'editMessageText'
+        assert updated['message_id'] == index + 1
+        assert original['text'].split('\n\n')[0] == updated['text'].split('\n\n')[0]
+        assert len(updated['text']) <= 3900
+        assert bool(updated['reply_markup']['inline_keyboard']) == (index == len(sent) - 1)
+    assert 'Учтено партий: 200.' in edits[-1][1]['text']
 
 
 @pytest.mark.parametrize('order_known', [True, False])
@@ -204,3 +241,41 @@ def test_empty_draft_has_button_and_confirmation_does_not_change_history(store):
     assert store.photo(pid)['status']=='confirmed'
     assert store.db.execute('SELECT count(*) FROM games').fetchone()[0]==1
     assert [tuple(row) for row in store.db.execute('SELECT * FROM ratings ORDER BY player_id')]==ratings_before
+
+
+def test_elo_pages_keep_boundaries_when_an_earlier_photo_changes_ratings(store):
+    pid = photo(store)
+    with store.transaction():
+        store.fix_draft(pid, [['М','И',11,8]] * 200, 42, False)
+        before, _ = draft_pages(store, pid)
+        older, _ = store.put_photo(-123, 9, 'older', 'older-sha', 99, 42, raw())
+        store.fix_draft(older, [['И','М',11,8]] * 30, 42, False)
+        approve(store, older, 2, 42, True)
+        approve(store, pid, 2, 42, True)
+        after, _ = draft_pages(store, pid)
+    def ordinals(pages):
+        return [[line.split('.')[0] for line in page.split('\n\n')[0].splitlines()] for page in pages]
+    assert ordinals(before) == ordinals(after)
+    assert before[0] != after[0]
+
+
+def test_elo_html_and_long_names_fit_without_splitting_games(store):
+    with store.transaction():
+        store.add_player('М', '<' * 60, None, 0)
+        store.add_player('И', '&' * 60, None, 0)
+        pid = photo(store)
+        store.fix_draft(pid, [['М','И',11,8]] * 20, 42, False)
+        pages, _ = draft_pages(store, pid)
+    assert all(len(page) <= 3900 for page in pages)
+    assert sum(page.count(' · Elo:') for page in pages) == 20
+    assert all(page.count('<u>') == page.count('</u>') for page in pages)
+
+
+def test_legacy_last_card_preserves_the_original_game_boundaries(store):
+    from ttar.bot import game_lines, split_message
+    pid = photo(store)
+    with store.transaction():
+        store.fix_draft(pid, [['М','И',11,8]] * 200, 42, False)
+    original = split_message('\n'.join(game_lines(store, pid, include_elo=False)), limit=3700)
+    _, payload = card_update(store, {'photo_id':pid, 'revision':2, 'chat_id':-123, 'message_id':55, 'kind':'text'})
+    assert payload['text'].split('\n\n')[0] == original[-1]
