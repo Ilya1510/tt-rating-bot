@@ -20,6 +20,9 @@ CREATE TABLE IF NOT EXISTS bookings(
  next_check REAL, checks INTEGER NOT NULL DEFAULT 0,
  create_attempted INTEGER NOT NULL DEFAULT 0, pending_action TEXT NOT NULL DEFAULT 'book',
  UNIQUE(room,start,end));
+CREATE TABLE IF NOT EXISTS booking_notices(
+ booking_id INTEGER PRIMARY KEY REFERENCES bookings(id), operation_id INTEGER NOT NULL,
+ chat_id INTEGER NOT NULL, message_id INTEGER, text TEXT NOT NULL, sent_text TEXT);
 '''
 
 

@@ -144,3 +144,118 @@ def test_restart_does_not_repeat_work_but_reconciles_bookings(store):
     claim(store, work=True)
     recover(store)
     assert dict(store.db.execute('SELECT kind,status FROM operations')) == {'book': 'pending', 'work': 'uncertain'}
+
+
+class BookingTelegram:
+    def __init__(self): self.calls = []
+    def call(self, method, **payload):
+        assert not any(key.startswith('_') for key in payload)
+        self.calls.append((method, payload))
+        return {'message_id': 501} if method == 'sendMessage' else True
+
+
+class MissingResourceClient:
+    def create_booking(self, start, end, key, saved):
+        saved('event123')
+        return self.verify_booking('event123', start, end)
+    def verify_booking(self, *args):
+        return BookingResult('unverifiable', 'event123', 'https://example.com/event123',
+                             'Календарь не показывает участие ресурса зала.')
+
+
+def drain(store, tg):
+    from ttar.worker import flush_outbox
+    while flush_outbox(store, tg): pass
+
+
+def test_missing_resource_sends_one_short_notice_even_after_ten_checks(store):
+    client, tg = MissingResourceClient(), BookingTelegram()
+    run_booking(store, client, operation(store))
+    drain(store, tg)
+    for _ in range(10):
+        store.db.execute('UPDATE bookings SET next_check=0')
+        check_pending(store, client, -123)
+        drain(store, tg)
+    assert len(tg.calls) == 1
+    assert tg.calls[0] == ('sendMessage', {'chat_id': -123,
+        'text': 'Встреча создана: 05.10.2026 19:00–20:00 МСК.\nhttps://example.com/event123'})
+    assert store.db.execute('SELECT next_check FROM bookings').fetchone()[0] is None
+
+
+@pytest.mark.parametrize('initial_delivered', [True, False])
+def test_late_refusal_edits_original_or_updates_unsent_notice(store, initial_delivered):
+    client, tg = MissingResourceClient(), BookingTelegram()
+    run_booking(store, client, operation(store))
+    if initial_delivered: drain(store, tg)
+    client.verify_booking = lambda *args: BookingResult('rejected', 'event123',
+        'https://example.com/event123', 'Зал отклонил приглашение.')
+    store.db.execute('UPDATE bookings SET next_check=0')
+    check_pending(store, client, -123)
+    drain(store, tg)
+    assert [method for method, _ in tg.calls].count('sendMessage') == 1
+    assert len(tg.calls) == (2 if initial_delivered else 1)
+    assert tg.calls[-1][0] == ('editMessageText' if initial_delivered else 'sendMessage')
+    assert 'Зал отклонил приглашение.' in tg.calls[-1][1]['text']
+    if initial_delivered: assert tg.calls[-1][1]['message_id'] == 501
+
+
+def test_acceptance_recheck_does_not_add_or_edit_same_notice(store):
+    client, tg = MissingResourceClient(), BookingTelegram()
+    run_booking(store, client, operation(store))
+    drain(store, tg)
+    client.verify_booking = lambda *args: BookingResult('accepted', 'event123',
+        'https://example.com/event123', 'Зал принял приглашение; занятость подтверждена.')
+    store.db.execute('UPDATE bookings SET next_check=0')
+    check_pending(store, client, -123)
+    drain(store, tg)
+    assert len(tg.calls) == 1
+
+
+def test_uncertain_creation_without_id_is_not_reported_as_created(store):
+    from ttar.maintenance import booking_text
+    run_booking(store, MissingResourceClient(), operation(store))
+    row = store.db.execute('SELECT * FROM bookings').fetchone()
+    text = booking_text(row, BookingResult('uncertain', reason='Ответ потерян'))
+    assert 'Встреча создана' not in text
+    assert 'Ответ потерян' in text
+
+
+def test_pending_cancellation_updates_its_own_single_message(store):
+    client, tg = MissingResourceClient(), BookingTelegram()
+    run_booking(store, client, operation(store))
+    drain(store, tg)
+    with store.transaction():
+        enqueue(store, '/cancel_booking', '/cancel_booking 2026-10-05', OWNER_ID, -123, 'cancel:single')
+    client.cancel_booking = lambda *args: BookingResult('pending', 'event123')
+    run_booking(store, client, claim(store));drain(store, tg)
+    assert 'Отмена встречи' in tg.calls[-1][1]['text']
+    client.cancel_booking = lambda *args: BookingResult('cancelled', 'event123', reason='Бронь отменена.')
+    store.db.execute('UPDATE bookings SET next_check=0')
+    check_pending(store, client, -123);drain(store, tg)
+    assert [m for m, _ in tg.calls] == ['sendMessage', 'sendMessage', 'editMessageText']
+    assert 'Бронь отменена' in tg.calls[-1][1]['text']
+
+
+def test_result_changed_during_initial_send_is_edited_without_second_send(store):
+    client = MissingResourceClient()
+    run_booking(store, client, operation(store))
+    class RacingTelegram(BookingTelegram):
+        def call(self, method, **payload):
+            result = super().call(method, **payload)
+            if method == 'sendMessage':
+                client.verify_booking = lambda *args: BookingResult('rejected', 'event123',
+                    'https://example.com/event123', 'Зал отклонил приглашение.')
+                store.db.execute('UPDATE bookings SET next_check=0')
+                check_pending(store, client, -123)
+            return result
+    tg = RacingTelegram();drain(store, tg)
+    assert [method for method, _ in tg.calls] == ['sendMessage', 'editMessageText']
+    assert 'Зал отклонил приглашение.' in tg.calls[-1][1]['text']
+
+
+def test_invitation_error_is_not_hidden_as_resource_metadata(store):
+    from ttar.maintenance import booking_text
+    run_booking(store, MissingResourceClient(), operation(store))
+    row = store.db.execute('SELECT * FROM bookings').fetchone()
+    reason = 'Встреча создана, но приглашения Роме и Максиму пока не подтверждены API.'
+    assert reason in booking_text(row, BookingResult('unverifiable', 'event123', reason=reason))

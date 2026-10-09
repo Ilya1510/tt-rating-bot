@@ -53,7 +53,22 @@ def flush_outbox(store, telegram):
     draft_id = payload.pop('_draft_id', None)
     revision = payload.pop('_draft_revision', None)
     page = payload.pop('_draft_page', None)
+    booking_notice = payload.pop('_booking_notice', None)
     method = row['method']
+    if method == 'updateBookingNotice':
+        booking_notice = payload
+    if booking_notice:
+        notice = store.db.execute('SELECT * FROM booking_notices WHERE booking_id=? AND operation_id=?',
+            (booking_notice['booking_id'], booking_notice['operation_id'])).fetchone()
+        if (notice is None or (method == 'updateBookingNotice' and
+                (notice['message_id'] is None or notice['text'] == notice['sent_text']))):
+            with store.transaction():
+                store.db.execute("UPDATE outbox SET status='superseded' WHERE id=?", (row['id'],))
+            return True
+        payload = {'chat_id': notice['chat_id'], 'text': notice['text']}
+        if method == 'updateBookingNotice':
+            method = 'editMessageText'
+            payload['message_id'] = notice['message_id']
     if method == 'updateDraftCard':
         # Resolve the current count when sending, including delayed retries.
         method, payload = card_update(store, payload)
@@ -74,6 +89,16 @@ def flush_outbox(store, telegram):
             return True
     with store.transaction():
         store.db.execute("UPDATE outbox SET status='sent' WHERE id=?", (row['id'],))
+        if booking_notice:
+            message_id = result.get('message_id') if isinstance(result, dict) else None
+            message_id = message_id or payload.get('message_id')
+            store.db.execute('UPDATE booking_notices SET message_id=COALESCE(?,message_id),sent_text=? '
+                'WHERE booking_id=? AND operation_id=?',
+                (message_id, payload['text'], booking_notice['booking_id'], booking_notice['operation_id']))
+            current = store.db.execute('SELECT * FROM booking_notices WHERE booking_id=? AND operation_id=?',
+                (booking_notice['booking_id'], booking_notice['operation_id'])).fetchone()
+            if current and current['text'] != payload['text']:
+                store.send(f"booking-sync:{row['id']}", 'updateBookingNotice', booking_notice)
         if draft_id and isinstance(result, dict) and result.get('message_id'):
             store.register_card(draft_id, revision, payload['chat_id'], result['message_id'],
                                 'text' if page is None else f'text:{page}')
