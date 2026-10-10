@@ -15,10 +15,30 @@ from .core import Store
 from .recognizer import remote_recognize
 from .telegram import TelegramError
 from .cloud_telegram import CloudTelegram
+from .cloud_poller import PollTelegram, run as poll_updates
 from .webhook import chat_of
 
 LOG = logging.getLogger('ttar')
 STOP = threading.Event()
+
+
+def telegram_client(config, credentials):
+    if config.get('telegram_transport') == 'direct':
+        # Resolve the hostname normally: this host reaches Telegram over IPv6.
+        return PollTelegram(credentials['telegram_token'])
+    return CloudTelegram(config['telegram_cloud_url'], credentials['cloud_function_key'])
+
+
+def receive_direct(config, credentials):
+    store = Store(config['database'])
+    try:
+        result = poll_updates(STOP, telegram_client(config, credentials),
+            lambda body: store.ingest(json.loads(body)), config['allowed_chat_id'],
+            config.get('accept_from', 0))
+        if result:
+            LOG.error('Direct receiver stopped: credential or competing poller')
+    finally:
+        store.db.close()
 
 
 def receive(config, credentials):
@@ -125,7 +145,7 @@ def process_photos(config, credentials):
     # Separate SQLite connection and cloud adapter; only the main thread sends
     # the outbox, so concurrent OCR cannot duplicate or hold up card updates.
     store = Store(config['database'])
-    telegram = CloudTelegram(config['telegram_cloud_url'], credentials['cloud_function_key'])
+    telegram = telegram_client(config, credentials)
     bot = Bot(store, telegram, lambda data: remote_recognize(data, config['recognizer_socket']), config['allowed_chat_id'])
     try:
         while not STOP.is_set():
@@ -146,7 +166,8 @@ def main():
     # Deploy can safely start this unit before credentials/cloud configuration exist.
     while not STOP.is_set():
         config = json.loads(Path(os.environ.get('TTAR_CONFIG', '/etc/ttar/config.json')).read_text())
-        if secret_path.exists() and config.get('queue_url') and config.get('allowed_chat_id'):
+        if secret_path.exists() and config.get('allowed_chat_id') and (
+                config.get('telegram_transport') == 'direct' or config.get('queue_url')):
             break
         LOG.info('Waiting for cloud/queue configuration; no photos processed')
         STOP.wait(60)
@@ -157,14 +178,24 @@ def main():
     fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     store = Store(config['database'])
     store.recover()
-    telegram = CloudTelegram(config['telegram_cloud_url'], credentials['cloud_function_key'])
+    telegram = telegram_client(config, credentials)
+    if config.get('telegram_transport') == 'direct':
+        if telegram.call('getMe').get('username') != 'tt_chatgpt_rating_bot':
+            raise RuntimeError('Wrong Telegram bot')
+        if telegram.call('getWebhookInfo').get('url'):
+            raise RuntimeError('Disable the webhook before direct polling')
     bot = Bot(store, telegram, lambda data: remote_recognize(data, config['recognizer_socket']), config['allowed_chat_id'])
-    thread = threading.Thread(target=receive, args=(config, credentials), daemon=True)
+    receiver = receive_direct if config.get('telegram_transport') == 'direct' else receive
+    thread = threading.Thread(target=receiver, args=(config, credentials), daemon=True)
     thread.start()
     photos = threading.Thread(target=process_photos, args=(config, credentials))
     photos.start()
     LOG.info('Worker started, rating unit=%s; confirmations required', store.setting('unit'))
     while not STOP.is_set():
+        if not thread.is_alive():
+            STOP.set()
+            photos.join()
+            raise RuntimeError('Receiver exited; worker must restart')
         job = store.claim(photos=False)
         if job:
             process_job(store, bot, job, config['allowed_chat_id'])

@@ -3,6 +3,7 @@
 import json
 import shlex
 import subprocess
+import argparse
 
 from deploy_cloud import ROOT, PRIVATE, STATE
 
@@ -52,13 +53,16 @@ print(json.dumps({'control_installed':True,'calendar_credential':bool(p['credent
 
 
 def main():
-    state = json.loads(STATE.read_text())
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--direct', action='store_true', help='Install without cloud release credentials')
+    direct = parser.parse_args().direct
+    state = json.loads(STATE.read_text()) if STATE.exists() else {'allowed_chat_id': -1004452237468}
     data = {'commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT).decode().strip(), 'files': {str(p.relative_to(ROOT)): p.read_text() for p in (ROOT/'ttar').glob('*.py')},
             'unit': (ROOT/'deploy/ttar-maintenance.service').read_text(),
             'config': {'database': '/var/lib/ttar/history.sqlite3', 'allowed_chat_id': state['allowed_chat_id'],
-                       'function_id': state['function_id'], 'booking_schedule_enabled': True,
+                       'function_id': state.get('function_id'), 'booking_schedule_enabled': True,
                        'work': {'deploy_command': ['/opt/ttar/.venv/bin/python', '/opt/ttar-control/release_entry.py']}},
-            'credentials': {'release_cloud_key': json.loads((PRIVATE/'release-cloud-key.json').read_text())},
+            'credentials': {} if direct else {'release_cloud_key': json.loads((PRIVATE/'release-cloud-key.json').read_text())},
             'installer': ROOT_INSTALL}
     parent = r'''import json,os,subprocess,sys
 p=json.load(sys.stdin)

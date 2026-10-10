@@ -11,6 +11,12 @@
 
 ## Рабочая архитектура
 
+Текущая схема после переноса 10.10.2026 — **без Yandex Cloud**: оба бота
+работают на `ilya-grid-vm`, Telegram доступен через DNS/IPv6, VK — через
+Groups Long Poll API. Подробности и откат: [docs/direct-host.md](docs/direct-host.md).
+Ниже сохранена прежняя облачная схема и история её настройки для отката;
+она не является инструкцией включать облако при обычном обновлении.
+
 ```mermaid
 flowchart LR
   TG[Telegram] --> P[Изолированный poller в Yandex Cloud]

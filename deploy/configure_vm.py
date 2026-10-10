@@ -9,8 +9,9 @@ from pathlib import Path
 if os.geteuid() != 0:
     raise SystemExit('Run as root')
 data = json.load(sys.stdin)
-if 'telegram_token' in data['credentials'] or 'cloud_function_key' not in data['credentials']:
-    raise SystemExit('VM must use the private cloud transport without a Telegram token')
+direct = data['config'].get('telegram_transport') == 'direct'
+if not data['credentials'].get('telegram_token' if direct else 'cloud_function_key'):
+    raise SystemExit('Missing credential for selected Telegram transport')
 config_path = Path('/etc/ttar/config.json')
 config = json.loads(config_path.read_text())
 config.update(data['config'])

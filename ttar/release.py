@@ -129,8 +129,10 @@ def main(candidate, old_commit):
         raise ReleaseError('Invalid candidate directory')
     settings = json.loads(Path('/etc/ttar/maintenance.json').read_text())
     creds = json.loads(Path('/run/credentials/ttar-maintenance.service/maintenance.json').read_text())
-    cloud = Cloud(creds['release_cloud_key'])
-    old = cloud.live(settings['function_id'])
+    runtime_config = json.loads(Path('/etc/ttar/config.json').read_text())
+    direct = runtime_config.get('telegram_transport') == 'direct'
+    cloud = None if direct else Cloud(creds['release_cloud_key'])
+    old = None if direct else cloud.live(settings['function_id'])
     commit = run(['git', '-c', 'core.hooksPath=/dev/null', '-C', str(root), 'rev-parse', 'HEAD']).decode().strip()
     deployed_marker = Path('/var/lib/ttar-release/deployed.json')
     previous_commit = json.loads(deployed_marker.read_text())['commit'] if deployed_marker.exists() else old_commit
@@ -162,7 +164,7 @@ def main(candidate, old_commit):
             'old_policy': (previous_policy or b'{"regular_minutes":150}').decode(),
             'old_units': old_units, 'database': settings['database']}))
     files = ['webhook.py', 'telegram.py', '__init__.py']
-    changed_cloud = any((root/'ttar'/f).read_bytes() != (live_root/'ttar'/f).read_bytes() for f in files)
+    changed_cloud = not direct and any((root/'ttar'/f).read_bytes() != (live_root/'ttar'/f).read_bytes() for f in files)
     promoted = installed = policy_installed = control_installed = False
     try:
         if changed_cloud:
@@ -210,7 +212,8 @@ def main(candidate, old_commit):
                  '/opt/ttar/.venv/bin/python', str(guard_script), str(state_file)])
         return {'status': 'done', 'summary': 'Изменение опубликовано.',
                 'technical': 'Тесты пройдены; БД сохранена; сервисы работают.' +
-                    (' Облачная функция проверена и обновлена.' if changed_cloud else ' Облачная функция не требовала изменений.'),
+                    (' Прямой Telegram-транспорт.' if direct else
+                     ' Облачная функция проверена и обновлена.' if changed_cloud else ' Облачная функция не требовала изменений.'),
                 'rollback_status': 'not_needed', 'controller_reload': reload_controller}
     except Exception as error:
         recovered = True

@@ -1,0 +1,30 @@
+[Unit]
+Description=Local Telegram to VK bridge
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=tg-vk-bridge
+Group=tg-vk-bridge
+WorkingDirectory=/opt/tg-vk-bridge
+EnvironmentFile=/etc/tg-vk-bridge.env
+Environment=PYTHONUNBUFFERED=1
+Environment=BRIDGE_DATABASE=/var/lib/tg-vk-bridge/history.sqlite3
+Environment=TG_CLIENT_CONFIG=/var/lib/tg-vk-bridge/.tg_client.conf
+Environment=TG_CLIENT_SESSION=/var/lib/tg-vk-bridge/.tg_client
+ExecStart=/opt/tg-vk-bridge/.venv/bin/python -m bridge.runner
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=180
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/tg-vk-bridge
+CapabilityBoundingSet=
+MemoryMax=512M
+
+[Install]
+WantedBy=multi-user.target
