@@ -1,0 +1,14 @@
+[Unit]
+Description=Consistent local bridge backup
+
+[Service]
+Type=oneshot
+User=tg-vk-bridge
+Group=tg-vk-bridge
+ExecStart=/opt/tg-vk-bridge/.venv/bin/python /opt/tg-vk-bridge/scripts/backup_bridge.py
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/tg-vk-bridge /var/backups/tg-vk-bridge

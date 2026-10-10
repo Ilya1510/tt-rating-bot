@@ -4,7 +4,8 @@ import json
 import os
 import signal
 import threading
-import requests
+import time
+from . import http as requests
 
 from . import storage
 from .safe_log import safe_print as log
@@ -37,6 +38,7 @@ def receive_telegram():
             updates = body['result']
             if updates:
                 storage.persist_batch('tg', updates, max(u['update_id'] for u in updates) + 1)
+            storage.set_state('tg_last_poll', time.time())
         except Exception as error:
             log('Telegram receive failed:', type(error).__name__)
             STOP.wait(3)
@@ -65,6 +67,7 @@ def receive_vk():
                 raise RuntimeError('VK long poll error')
             else:
                 storage.persist_batch('vk', response['updates'], response['ts'])
+                storage.set_state('vk_last_poll', time.time())
         except Exception as error:
             log('VK receive failed:', type(error).__name__)
             STOP.wait(3)

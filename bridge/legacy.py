@@ -1,4 +1,5 @@
-import configparser, json, os, requests, random, tempfile, time
+import configparser, json, os, random, tempfile, time
+from . import http as requests
 from .storage import load_mapping, save_mapping
 from .safe_log import safe_print as print
 

@@ -49,9 +49,10 @@ after tests with candidate directory and previous commit arguments under root.
 It must be idempotent, preserve data and avoid printing secrets. It is unnecessary
 for ordinary Python/control/policy changes. Generic script changes are copied
 alongside runtime files; the hook can apply additional requested infrastructure
-or dependency changes. Cloud Telegram ingress remains on the separate cloud VM;
-changes there require a working deployment route, not direct Telegram from the
-internal VM. Failures must be reported honestly.
+or dependency changes. Telegram ingress and replies now run directly on the
+worker VM using IPv6. Direct releases do not access Yandex Cloud. The separate
+TG-VK bridge is deployed from `bridge/`; see `direct-host.md`.
+Failures must be reported honestly.
 
 booking-policy.json regular_minutes is validated and atomically applied to the
 scheduler. The current regular target is 19:00–21:30. The room may reject it under

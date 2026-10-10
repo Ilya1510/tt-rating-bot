@@ -3,6 +3,7 @@ import http.client
 import ipaddress
 import re
 import socket
+import time
 
 
 class TelegramError(RuntimeError):
@@ -36,6 +37,19 @@ class Telegram:
                     sock.close()
                     raise
                 return sock
+            connection._create_connection = connect
+        else:
+            def connect(target, wait, source_address=None, **kwargs):
+                # Retry only TCP establishment: no HTTP bytes have been sent yet.
+                for attempt in range(3):
+                    try:
+                        sock = socket.create_connection(target, min(wait, 5), source_address)
+                        sock.settimeout(wait)
+                        return sock
+                    except OSError:
+                        if attempt == 2:
+                            raise
+                        time.sleep(.2)
             connection._create_connection = connect
         try:
             connection.request('POST' if payload is not None else 'GET', path,
