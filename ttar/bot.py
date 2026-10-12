@@ -48,11 +48,55 @@ def draft_footer(store, pid):
             text += '\nElo рассчитан предварительно; будет учтён после подтверждения.'
         if not games:
             text = 'Завершённых партий на фото не нашёл.\n\n' + text
+    summary = elo_summary(store, pid)
+    if summary:
+        text += '\n\n' + summary
     buttons.extend(stats_button(store)['inline_keyboard'])
     return text, {'inline_keyboard': buttons}
 
 
-def game_lines(store, pid, *, budget=False, include_elo=True):
+def elo_summary(store, pid):
+    """Sum unrounded changes, replaying drafts without recording any games."""
+    current = store.photo(pid)
+    totals, ratings = {}, {}
+    preliminary = False
+    count = 0
+    for photo in store.db.execute(
+            'SELECT * FROM photos WHERE chat_id=? ORDER BY occurred_at,message_id,id',
+            (current['chat_id'],)):
+        if (photo['occurred_at'], photo['message_id'], photo['id']) > (
+                current['occurred_at'], current['message_id'], pid):
+            break
+        if photo['status'] == 'draft':
+            games = json.loads(photo['proposal'])
+            preliminary = preliminary or bool(games)
+        else:
+            games = [(g['a'], g['b'], g['score_a'], g['score_b']) for g in store.db.execute(
+                'SELECT * FROM games WHERE photo_id=? AND active=1 ORDER BY ordinal,id',
+                (photo['id'],))]
+        for a, b, sa, sb in games:
+            before_a, before_b = ratings.get(a, 1000.), ratings.get(b, 1000.)
+            ratings[a], ratings[b] = elo(before_a, before_b, 0 if sa > sb else 1,
+                                       float(store.setting('k')))
+            for player, delta in ((a, ratings[a] - before_a), (b, ratings[b] - before_b)):
+                totals[player] = totals.get(player, 0.) + delta
+            count += 1
+    if not totals:
+        return ''
+    def lines(values):
+        return '\n'.join(f'{html.escape(store.name(player))}: {delta:+.0f}'
+                         for player, delta in values.items())
+    sections = []
+    local = {}
+    game_lines(store, pid, totals=local)
+    if local:
+        sections.append('Суммарный дифф Elo за фото:\n' + lines(local))
+    label = ' (предварительно)' if preliminary else ''
+    sections.append(f'Суммарный дифф Elo за все фото · {count} партий{label}:\n' + lines(totals))
+    return '\n\n'.join(sections)
+
+
+def game_lines(store, pid, *, budget=False, include_elo=True, totals=None):
     photo = store.photo(pid)
     games = json.loads(photo['proposal'])
     recorded = {row['ordinal']: row for row in store.db.execute(
@@ -79,6 +123,7 @@ def game_lines(store, pid, *, budget=False, include_elo=True):
         else:
             nb = f'<u>{nb}</u>'
         change_a = change_b = ''
+        da = db = 0.
         if photo['status'] == 'draft':
             before_a, before_b = ratings.get(a, 1000.), ratings.get(b, 1000.)
             ratings[a], ratings[b] = elo(before_a, before_b, 0 if sa > sb else 1,
@@ -90,6 +135,9 @@ def game_lines(store, pid, *, budget=False, include_elo=True):
             da = row['rating_a_after'] - row['rating_a_before']
             db = row['rating_b_after'] - row['rating_b_before']
             change_a, change_b = f' {da:+.0f}', f' {db:+.0f}'
+        if totals is not None:
+            totals[a] = totals.get(a, 0.) + da
+            totals[b] = totals.get(b, 0.) + db
         if budget:
             # A single Elo change is bounded by K. Reserve the same width for
             # every state, even if ratings change while the photo is reviewed.
@@ -111,9 +159,11 @@ def draft_pages(store, pid):
     # Boundaries depend on names/scores and maximum delta width, never on votes
     # or the current rating. Never split a game line or its HTML tags.
     lines = game_lines(store, pid)
+    footer, keyboard = draft_footer(store, pid)
+    limit = min(3500, max(1000, 3900 - len(footer) - 100))
     pages, current, size = [], [], 0
     for line, reserve in zip(lines, game_lines(store, pid, budget=True)):
-        if current and size + len(reserve) + 1 > 3500:
+        if current and size + len(reserve) + 1 > limit:
             pages.append('\n'.join(current))
             current, size = [], 0
         current.append(line)

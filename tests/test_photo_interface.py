@@ -152,3 +152,31 @@ def test_old_photo_elo_preview_ignores_later_games(store):
         approve(store, pid, 1, 42, True)
         confirmed, _ = draft(store, pid)
     assert '<u>Максим</u> +16 — Илья -16 11:8' in confirmed
+
+
+def test_cumulative_elo_includes_multiple_draft_photos_once(store):
+    from ttar.bot import elo_summary, draft_pages
+    with store.transaction():
+        first, _ = store.put_photo(-123, 10, 'first-total', 'first-total-hash', 100, 42, raw())
+        second, _ = store.put_photo(-123, 11, 'second-total', 'second-total-hash', 101, 42, raw())
+        store.fix_draft(second, [['И', 'М', 11, 9], ['Р', 'В', 11, 8]], 42, False)
+        summary = elo_summary(store, second)
+        a, b = elo(*elo(1000., 1000., 0), 1)
+        total = summary.split('Суммарный дифф Elo за все фото')[1]
+        assert f'Максим: {a - 1000:+.0f}' in total
+        assert f'Илья: {b - 1000:+.0f}' in total
+        assert 'Рома: +16' in total and 'Валя: -16' in total
+        assert '3 партий (предварительно)' in total
+        assert total.count('Максим:') == total.count('Илья:') == 1
+        assert store.db.execute('SELECT count(*) FROM games').fetchone()[0] == 0
+        approve(store, first, 1, 42, True)
+        approve(store, second, 2, 42, True)
+        confirmed = elo_summary(store, second)
+        assert 'предварительно' not in confirmed
+        assert confirmed.split('3 партий:')[1] == total.split('3 партий (предварительно):')[1]
+        pages, _ = draft_pages(store, second)
+        assert 'Суммарный дифф Elo за все фото' in pages[-1]
+        store.amend(1, 42, True)
+        updated = elo_summary(store, second)
+        assert '2 партий:' in updated
+        assert 'Максим: -16' in updated.split('за все фото')[1]
