@@ -1,3 +1,5 @@
+import base64
+import uuid
 import json
 import http.client
 import ipaddress
@@ -17,6 +19,27 @@ class TelegramError(RuntimeError):
 def redact(text):
     text = re.sub(r'https://api\.telegram\.org/(?:file/)?bot[^\s\"\']+', '[TELEGRAM_URL]', str(text))
     return re.sub(r'(?:\d{6,}:[A-Za-z0-9_-]{20,}|(?:y[01]_|t[01]_|AQAD-|sk-)[A-Za-z0-9_-]+)', '[SECRET]', text)
+
+
+def request_body(payload):
+    if payload is None:
+        return None, 'application/json'
+    if 'photo_base64' not in payload:
+        return json.dumps(payload).encode(), 'application/json'
+    payload = dict(payload)
+    photo = base64.b64decode(payload.pop('photo_base64'), validate=True)
+    if not photo.startswith(b'\x89PNG\r\n\x1a\n') or len(photo) > 2 * 1024 * 1024:
+        raise ValueError('Invalid graph image')
+    boundary = uuid.uuid4().hex
+    parts = []
+    for key, value in payload.items():
+        if not re.fullmatch(r'[a-z_]+', key):
+            raise ValueError('Invalid field')
+        value = json.dumps(value) if isinstance(value, (dict, list)) else str(value)
+        parts.append(f'--{boundary}\r\nContent-Disposition: form-data; name="{key}"\r\n\r\n{value}\r\n'.encode())
+    parts.append(f'--{boundary}\r\nContent-Disposition: form-data; name="photo"; filename="elo.png"\r\nContent-Type: image/png\r\n\r\n'.encode() + photo + b'\r\n')
+    parts.append(f'--{boundary}--\r\n'.encode())
+    return b''.join(parts), 'multipart/form-data; boundary=' + boundary
 
 
 class Telegram:
@@ -52,9 +75,10 @@ class Telegram:
                         time.sleep(.2)
             connection._create_connection = connect
         try:
+            body, content_type = request_body(payload)
             connection.request('POST' if payload is not None else 'GET', path,
-                               body=json.dumps(payload).encode() if payload is not None else None,
-                               headers={'Content-Type': 'application/json'})
+                               body=body,
+                               headers={'Content-Type': content_type})
             response = connection.getresponse()
             body = response.read(limit + 1)
             if response.status >= 400:

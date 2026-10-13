@@ -12,6 +12,7 @@ from .operations import COMMANDS as OWNER_COMMANDS, enqueue as enqueue_operation
 ROSTER = [('М', 'Максим'), ('И', 'Илья'), ('Р', 'Рома'), ('В', 'Валя')]
 HELP = ('Пришли фото, проверь список и нажми «Подтвердить». Нужны 2 разных участника.\n'
         '/stat N — последние N партий. По умолчанию N = 1000.\n'
+        '/elo_graph — график Эло четырёх игроков по датам.\n'
         '/elo_chase — сколько побед подряд нужно Илье над Максом для обгона в Elo.\n'
         '/work вопрос — для всех; доработки бота — только для Ильи.\n'
         'Для Ильи:\n'
@@ -389,6 +390,20 @@ class Bot:
         args = text.split(maxsplit=1)[1] if len(text.split(maxsplit=1)) > 1 else ''
         if command == '/stat':
             return statistics(self.store, parse_window(args, int(self.store.setting('stats_window'))))
+        if command in ('/elo_graph', '/graph'):
+            import base64
+            from .elo_graph import daily_history, render_graph
+            if args:
+                raise ValueError('Используй /elo_graph без аргументов')
+            history = daily_history(self.store, ROSTER)
+            if not history:
+                return 'Пока нет подтверждённых партий для графика Эло.', None
+            self.store.send(key + ':graph', 'sendPhoto', {
+                'chat_id': self.allowed_chat,
+                'photo_base64': base64.b64encode(render_graph(history)).decode(),
+                'caption': 'Эло по датам · Максим, Илья, Рома, Валя.\n'
+                           'Рейтинг на конец игрового дня (Москва); только подтверждённые партии.'})
+            return None, None
         if command == '/elo_chase':
             return elo_chase(self.store)
         if command == '/confirm':
