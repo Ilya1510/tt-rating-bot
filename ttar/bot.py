@@ -12,7 +12,7 @@ from .operations import COMMANDS as OWNER_COMMANDS, enqueue as enqueue_operation
 ROSTER = [('М', 'Максим'), ('И', 'Илья'), ('Р', 'Рома'), ('В', 'Валя')]
 HELP = ('Пришли фото, проверь список и нажми «Подтвердить». Нужны 2 разных участника.\n'
         '/stat N — последние N партий. По умолчанию N = 1000.\n'
-        '/elo_graph — график Эло четырёх игроков по датам.\n'
+        '/elo_graph — графики Эло четырёх игроков по датам и партиям.\n'
         '/elo_chase — сколько побед подряд нужно Илье над Максом для обгона в Elo.\n'
         '/work вопрос — для всех; доработки бота — только для Ильи.\n'
         'Для Ильи:\n'
@@ -392,7 +392,7 @@ class Bot:
             return statistics(self.store, parse_window(args, int(self.store.setting('stats_window'))))
         if command in ('/elo_graph', '/graph'):
             import base64
-            from .elo_graph import daily_history, render_graph
+            from .elo_graph import daily_history, game_history, render_graph
             if args:
                 raise ValueError('Используй /elo_graph без аргументов')
             history = daily_history(self.store, ROSTER)
@@ -403,6 +403,13 @@ class Bot:
                 'photo_base64': base64.b64encode(render_graph(history)).decode(),
                 'caption': 'Эло по датам · Максим, Илья, Рома, Валя.\n'
                            'Рейтинг на конец игрового дня (Москва); только подтверждённые партии.'})
+            self.store.send(key + ':graph-games', 'sendPhoto', {
+                'chat_id': self.allowed_chat,
+                'photo_base64': base64.b64encode(
+                    render_graph(game_history(self.store, ROSTER), by_game=True)).decode(),
+                'caption': 'Эло после каждой партии · Максим, Илья, Рома, Валя.\n'
+                           'По оси X — порядковый номер подтверждённой партии; 0 — начальный рейтинг.\n'
+                           'Рейтинг игроков, не участвовавших в партии, остаётся прежним.'})
             return None, None
         if command == '/elo_chase':
             return elo_chase(self.store)

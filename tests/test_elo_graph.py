@@ -8,7 +8,7 @@ from PIL import Image
 
 from ttar.bot import Bot, ROSTER
 from ttar.core import Store
-from ttar.elo_graph import daily_history, render_graph
+from ttar.elo_graph import daily_history, game_history, render_graph
 from ttar.telegram import Telegram, request_body
 from ttar.webhook import relay_action
 from test_core import photo, approve, raw
@@ -32,6 +32,7 @@ def test_history_order_daily_totals_and_undo(tmp_path):
     store.db.execute('UPDATE games SET active=0 WHERE photo_id=?', (earlier,))
     store.recalculate()
     assert daily_history(store, ROSTER)[-1][1] == [1000, 1000, 1016, 984]
+    assert game_history(store, ROSTER) == [(0, [1000] * 4), (1, [1000, 1000, 1016, 984])]
     assert store.photo(draft)['status'] == 'draft'
     store.db.close()
 
@@ -45,6 +46,14 @@ def test_same_day_and_final_ratings(tmp_path):
         approve(store, photo(store, unique, at, raw(score=score)), 1)
     history = daily_history(store, ROSTER)
     assert len(history) == 2
+    games = game_history(store, ROSTER)
+    assert [number for number, _ in games] == [0, 1, 2]
+    assert games[0][1] == [1000] * 4
+    assert games[1][1] == [1016, 984, 1000, 1000]
+    assert games[2][1] == history[-1][1]
+    assert games[2][1][0] < games[1][1][0]
+    assert games[2][1][1] > games[1][1][1]
+    assert games[2][1][2:] == games[1][1][2:]
     for i, (alias, _) in enumerate(ROSTER):
         row = store.db.execute('SELECT rating FROM ratings WHERE player_id=?', (store.player(alias),)).fetchone()
         assert history[-1][1][i] == pytest.approx(row[0] if row else 1000)
@@ -63,7 +72,12 @@ def test_command_png_outbox_dedup_and_group_filter(tmp_path):
     for job in [jobs[0], jobs[0], jobs[1]]:
         bot.handle(job)
     rows = store.db.execute("SELECT * FROM outbox WHERE method='sendPhoto'").fetchall()
-    assert len(rows) == 1
+    assert len(rows) == 2
+    second = json.loads(rows[1]["payload"])
+    assert second["chat_id"] == -123
+    assert "после каждой партии" in second["caption"]
+    second_image = Image.open(io.BytesIO(base64.b64decode(second["photo_base64"])))
+    assert second_image.format == "PNG" and second_image.size == (1200, 720)
     payload = json.loads(rows[0]['payload'])
     png = base64.b64decode(payload['photo_base64'])
     image = Image.open(io.BytesIO(png))
