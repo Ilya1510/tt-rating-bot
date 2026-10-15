@@ -1,379 +1,364 @@
 # TT Rating Bot
 
-Бот `@tt_chatgpt_rating_bot`, группа «ТТ» (`-1004452237468`). Рейтинг за каждую
-подтверждённую партию: начальный Elo 1000, K=32.
+[English](#english) · [Русский](#russian)
 
-`/elo_chase` отвечает одним сообщением, сколько последовательных побед Ильи над
-Максом нужно для строгого обгона в Elo по текущим сохранённым рейтингам и K.
-Расчёт предполагает отсутствие других партий между победами; результаты игр и
-рейтинги не меняются. При равенстве нужна ещё одна победа. Команда не запускает
-автоматические рассылки; ответ отправляется обычным облачным транспортом бота.
+<a id="english"></a>
+## English
 
-## Рабочая архитектура
+A Telegram bot for a table tennis group: turn photos of handwritten scores into
+confirmed game results, Elo ratings and head-to-head statistics. It also books
+the playing room and supports questions and owner-requested code changes through
+an AI-assisted `/work` workflow.
 
-Текущая схема после переноса 10.10.2026 — **без Yandex Cloud**: оба бота
-работают на `ilya-grid-vm`, Telegram доступен через DNS/IPv6, VK — через
-Groups Long Poll API. Подробности и откат: [docs/direct-host.md](docs/direct-host.md).
-Ниже сохранена прежняя облачная схема и история её настройки для отката;
-она не является инструкцией включать облако при обычном обновлении.
+Built with Python, SQLite, systemd, Codex OCR and the Telegram and Calendar APIs.
+The repository also includes a separately deployed Telegram ↔ VK bridge.
+The bot's Telegram interface is in Russian.
+
+### Features
+
+- **Photo recognition.** Read player initials and scores from multiple board
+  blocks, match opponents by digit color when a row contains more than two
+  players, and exclude subtotals. Process each block from top to bottom, then
+  move left to right. Games to 11 and 21 are supported.
+- **Two-person confirmation.** Show a text draft with underlined winners and
+  rounded Elo changes beside each player. Two distinct group members must
+  confirm it before games affect history or ratings. Votes update the original
+  message; repeated clicks do not record games again. OCR warnings do not hide
+  the confirmation button.
+- **Statistics and charts.** Show a 4×4 head-to-head matrix for the latest N games
+  (default: 1,000), a custom deuce-based score and all-time Elo. Generate two PNG
+  charts: ratings by Moscow calendar date and after each confirmed game.
+- **Room booking.** Schedule bookings, invite participants, support manual
+  creation and cancellation, and return a calendar link. Send one initial
+  message and edit it for meaningful status changes.
+- **AI-assisted maintenance.** Answer questions about the group's games and
+  ratings, or implement an owner's change request, test it, push it to GitHub
+  and deploy it. Only the final result is sent to the chat.
+
+### Architecture
+
+Since **10 October 2026**, both bots run on `ilya-grid-vm` without Yandex Cloud
+runtime services. Telegram uses direct long polling over DNS/IPv6; the bridge
+receives VK events through Groups Long Poll. A local Mac or open SSH session is
+not required to keep the services running.
 
 ```mermaid
 flowchart LR
-  TG[Telegram] --> P[Изолированный poller в Yandex Cloud]
-  P --> Q[Yandex Message Queue]
-  Q --> W[Worker на ilya-grid-vm]
-  W --> OCR[Codex OCR]
-  W --> DB[(SQLite)]
-  W --> CF[Приватная Cloud Function, live]
-  CF --> TG
-  W --> O[Очередь задач владельца]
-  O --> M[Сервис бронирования и /work]
-  M --> CAL[Calendar API]
-  M --> CODE[Изолированный Codex и тесты]
+  TG[Telegram] <--> W[Tennis worker: direct long polling]
+  W <--> DB[(SQLite: games, jobs, votes, outbox)]
+  W --> OCR[Isolated Codex OCR]
+  DB <--> M[Booking and work controller]
+  M <--> CAL[Calendar API]
+  M --> CODE[Isolated editor and tests]
   CODE --> GH[GitHub]
+  M --> DEPLOY[Release and health checks]
+  BTG[Telegram bridge bot] <--> B[Bridge: durable SQLite inbox]
+  B <--> VK[VK Groups Long Poll]
 ```
 
-Обновления принимает отдельный `ttar-poller.service` на существующей облачной
-VM `tg-vk-poller`. Long polling получает новое сообщение сразу, ожидание пустой
-очереди — до 25 секунд. Bridge не изменяется. Полный пакет сохраняется в YMQ до
-подтверждения offset Telegram. Фото, нажатия и длинные задачи выполняются отдельно.
-На `ilya-grid-vm` нет Telegram-токена и прямых запросов к Telegram; ответы идут
-через приватную облачную функцию. Mac и открытая сессия для работы не нужны.
+The paid cloud resources used by the previous deployment were retired. The
+current setup still relies on the existing host and ChatGPT access; these are
+separate from Yandex Cloud resource costs.
 
-## Команды владельца и бронирование
+### Usage
 
-В списке партий после фото рядом со счётом показывается изменение Elo каждого
-игрока. До двух подтверждений это предварительный расчёт; после подтверждения
-используются сохранённые значения из истории. Длинные списки сохраняют границы
-сообщений, а при голосовании обновляются все их части.
+Send a photo, review the recognized games and press **«Подтвердить»**. Two
+participants must vote. Until the second vote, Elo changes are provisional.
+The roster is М — Максим (Maxim), И — Илья (Ilya), Р — Рома (Roma),
+В — Валя (Valya).
 
-`/work` доступен всем участникам разрешённой группы для вопросов. Любые изменения
-кода, настроек и прав, а также команды бронирования доступны только Telegram ID `220427487`:
+| Command | Behavior |
+| --- | --- |
+| `/confirm` | Vote for the group's latest draft; the inline button is the usual option. |
+| `/stat N` | Statistics for the latest N confirmed active games; N defaults to 1,000. |
+| `/elo_graph` or `/graph` | All-time Elo charts by date and game number. |
+| `/elo_chase` | Consecutive wins Ilya needs against Maxim to strictly overtake him in Elo, assuming no other games. Does not change ratings. |
+| `/work question or task` | Questions for all group members; code, configuration and permission changes for the authenticated owner only. |
+| `/create_booking YYYY-MM-DD HH:MM MINUTES` | Owner-only booking attempt; manual duration defaults to 60 minutes, maximum 90. With no arguments, use the next Monday or Thursday at 19:00. |
+| `/cancel_booking YYYY-MM-DD HH:MM` | Owner-only cancellation of a meeting managed by this bot. Omit the time if the date has one booking, or omit all arguments for the next future booking. |
 
-- `/work вопрос или задача` — разовый ответ по вашей статистике, истории, Elo,
-  броням и правилам либо изменение бота по явной просьбе. Для ответа доступны
-  снимок подтверждённых игр и Python-расчёты в режиме без записи. Такой вопрос
-  не создаёт команд и коммитов. Доработки проходят тесты и публикацию.
-  При падении тестов исполнитель получает диагностику и до двух попыток
-  исправления; публикация происходит только после успешной проверки.
-  В чат приходит только итог: без принятия задачи, этапов и списка файлов.
-- `/create_booking 2026-10-08 19:00 60` — попытка забронировать зал на указанный
-  часовой слот. Последний аргумент — минуты, по умолчанию 60, максимум 90.
-  Без аргументов выбирается ближайший понедельник или четверг в 19:00.
-- `/cancel_booking 2026-10-08 19:00` — отмена только нашей встречи. Время можно
-  опустить, если в этот день одна бронь; без даты выбирается ближайшая будущая.
+The statistics matrix uses **winners as rows and losers as columns**. Off-diagonal
+cells count wins within the selected window. Diagonal cells contain each player's
+custom score: a win gives +1; a loss gives −1 before deuce or 0 after deuce.
+Deuce is 10:10 for games to 11 and 20:20 for games to 21. An unlabeled 21:19
+result is treated as a game to 21 for this metric.
 
-Расписание: пятница и понедельник **19:01 Europe/Moscow**, бронь через три дня
-с **19:00 до 21:30 МСК**, одной заявкой на **150 минут** — `regular_minutes`
-в `booking-policy.json`. Получается менее 72 часов до начала. Сервис проверяет время
-каждую секунду; после перезапуска догоняет только пропущенный запуск текущего дня.
-Дедупликация по слоту сохраняется в SQLite. Отменённая бронь автоматически не
-создаётся заново; явная команда владельца может создать её повторно.
+Elo is shown separately and uses the entire confirmed history, regardless of N.
+Initial rating: **1,000**, default **K = 32**, updated after every game:
 
-Зал `conf_mm_5_15@yandex-team.ru`.
-В новые встречи автоматически приглашаются Рома (`klim-roma@yandex-team.ru`)
-и Максим (`polyanskiy-mn@yandex-team.ru`). Описание остаётся пустым;
-связь заявки со встречей хранится в SQLite по ID, а не в описании.
-Используется public Calendar API,
-`https://cloud-api.yandex.net/v1/calendar`; OAuth хранится в зашифрованном
-systemd credential. Успех — принятие ресурсом **ACCEPTED** и занятость тем же
-`event_id` на весь интервал. `201` и заполненное location не считаются бронью.
-После создания бот один раз отправляет дату, время и ссылку на встречу.
-Проверки ресурса продолжаются до пяти минут в фоне; отсутствие его метаданных
-не выводится в чат и не вызывает повторного сообщения. Явный отказ или результат
-отмены обновляет исходное сообщение. Ошибки создания и приглашения участников
-остаются видны. Потеря ответа создания не вызывает второй POST:
-сначала сверка по сохранённой привязке ID (для старых встреч — по маркеру).
-Если ответ потерян до сохранения ID, автоматическое повторное создание запрещено;
-чужие встречи с таким же названием и временем не присваиваются заявке.
-Конфликт не меняет время или чужие брони.
-По паспорту зал ограничивает самостоятельную бронь 90 минутами. Владелец может
-запросить одну регулярную бронь до 150 минут; текущая настройка 150 минут
-подтверждена владельцем, несмотря на паспортный лимит. Отказ зала сообщается, слот не
-сокращается и не делится. Реальное принятие ресурса ещё требует проверки.
-
-`/work` сначала разбирает запрос в режиме без записи. Если требуется изменение,
-контроллер проверяет реальный Telegram ID отправителя до запуска редактора.
-Текст «я Илья» и ответ модели прав доступа не дают. Владелец может менять весь
-код проекта, включая инструкции, права, сам `/work`, контроллер и deploy-скрипты.
-Старые правила реализации не являются запретом на их изменение владельцем.
-
-Редактор и тесты работают от отдельного Unix-пользователя. После успешных тестов
-предыдущая версия исполнителя публикует коммит и применяет изменения. Обновлённый
-контроллер перезапускается после сохранения задачи; финальный успех отправляется
-уже новой версией. При ошибке запуска отдельный guard восстанавливает предыдущие
-модули контроллера и бота, сохраняя результаты игр. Дополнительные действия выпуска
-могут быть заданы владельцем в `deploy/owner_apply.py`. Секреты не попадают в Git.
-Подробнее: [work runner](docs/work-runner.md).
-
-## Развёрнуто 3 октября 2026
-
-- Код: `/Users/ilya-grid/tt-rating-bot`; на VM: `/opt/ttar`.
-- VM: `ilya-grid-vm-59750598.klg.yp-c.yandex.net`, alias `ilya-grid-vm`, Ubuntu 24.04.
-- Сервисы `ttar-worker`, `ttar-ocr`, `ttar-maintenance`, таймер `ttar-backup` включены.
-- БД: `/var/lib/ttar/history.sqlite3`; конфигурация: `/etc/ttar/config.json`.
-- Backups: `/var/backups/ttar`, ежедневно 03:15 UTC (06:15 Москвы), 30 копий.
-- Отдельный `ttar-ocr` авторизован через ChatGPT; Codex 0.160.0 выполняется на VM.
-- Каталог `tt-rating`: `b1g5bco1nvs09aeph4sb`.
-- Функция `ttar-webhook`: `d4ekmj80j8457c3lsoa1`, Python 3.12, 256 MiB,
-  timeout 60 s, без prepared instances, 1 instance / 2 requests на зону.
-- `ttar-poller.service` на облачной VM принимает updates без webhook.
-  Gateway оставлен неиспользуемым; минутный таймер `a1s22ofbe04lc2b84336` на паузе.
-- Очереди `ttar-updates` и `ttar-dead-letters`: 14 дней хранения.
-- Три service account (приём, worker, выпуск) и Lockbox secret `ttar-webhook-secrets`.
-- `tg-vk-*` не изменялись. Новая VM не создавалась.
-- 166 тестов проверяют IAM JWT, облачный транспорт, webhook ACK, кнопки во время
-  OCR, два разных голоса, повторы и обновление счётчика,
-  ограничение методов/чата и проверку целостности фото при передаче частями.
-- Реальное фото (Telegram message 16) прошло облако → очередь → worker → Codex →
-  черновик №1 → облако → Telegram. Job done, outbox sent, pending Telegram 0.
-  В первоначальном черновике 24 предварительные строки из двух блоков. Новые
-  правила OCR учитывают порядок и словарь владельца; партии добавляются после
-  двух разных подтверждений.
-- Проверено отсутствие Telegram-токена в runtime credential VM; проверка прав
-  администратора через приватную облачную функцию успешна. Свежий backup выполнен.
-- Реальный Codex через OCR socket проверен на синтетической доске с четырьмя
-  колонками: М–Р 11:5 красным, И–В 8:11 синим, М–И 21:10 зелёным.
-  Три партии прочитаны верно, subtotal 3:1 исключён. Тест в рейтинг не записывался.
-- Физическая проверка с выключенным Mac пока требует действия владельца.
-
-## Сетевой фикс
-
-При запросе из Cloud Function DNS выдал `api.telegram.org → 149.154.166.110`:
-соединение закончилось TimeoutError. Та же функция через `149.154.167.220`
-получила успешный getMe нового бота за 0.19 s. В истории tg-vk bridge найден
-аналогичный фикс IPv4 и /etc/hosts от 6 и 26 июня.
-
-Функция использует переменную `TG_IPV4_ADDRESS=149.154.167.220` для TCP.
-Имя TLS и проверяемый сертификат остаются `api.telegram.org`: проверка TLS
-не отключается. Адрес — проверенный текущий обход маршрутизации, не постоянная
-гарантия Telegram. Если маршрут изменится, следует повторить безопасный probe
-и обновить только эту переменную. Probe временно приостанавливает наш таймер
-и заменяет latest-версию диагностикой; после него обязательно выполнить
-`enable_cloud_only.py`. API Gateway оставлен как резерв: Telegram-доставка через него давала таймауты.
-Рабочий вход — отдельный long poller на облачной VM. Pending updates
-при переходе не удаляются.
-
-## Доступы и обновление
-
-Функция приватная, анонимные вызовы запрещены IAM. Producer имеет ymq.writer
-в своём каталоге, доступ к payload только своего Lockbox secret и право
-вызова функции. Consumer имеет ymq.reader в своём каталоге и
-functions.functionInvoker только на этой функции. Временный ymq.admin удалён.
-
-Telegram-токен хранится в Lockbox и используется только функцией. На VM ключи
-queue-reader и авторизованный RSA-ключ consumer шифруются systemd-creds в
-`/etc/credstore.encrypted/ttar.json`; systemd передаёт их worker через приватный
-runtime-каталог. IAM-токен функция-вызова worker получает и обновляет сам.
-Codex не получает этих ключей, Telegram-токена, доступа к БД и конфигурации.
-Личные конфигурации yc и Codex с Mac на сервер не копируются.
-
-Cloud adapter разрешает sendMessage, editMessageText, answerCallbackQuery, getChatMember и
-скачивание фото. sendMessage/getChatMember ограничены разрешённой группой.
-Фото до 20 MiB передаётся частями по 1 MiB с проверкой общей длины и SHA-256,
-чтобы не превышать лимит JSON Cloud Functions 3.5 MB. Function logging выключен.
-
-Для обновления существующей облачной схемы после синхронизации исходников и
-зависимостей с VM:
-
-```bash
-cd /Users/ilya-grid/tt-rating-bot
-.venv/bin/python scripts/enable_cloud_only.py
+```text
+E_A = 1 / (1 + 10^((R_B - R_A) / 400))
+R_A_new = R_A + K × (S_A - E_A)
+S_A = 1 for a win, 0 for a loss
 ```
 
-Скрипт проверяет нового бота и отсутствие чужого webhook, обновляет существующую
-функцию с тегом `live`, устанавливает credentials через stdin SSH. В режиме
-`cloud_vm_poll` сохраняет отдельный приёмник и оставляет минутный таймер на паузе.
-Новые версии не должны включать второй poller. Резервный исторический скрипт webhook (текущий маршрут Telegram → gateway даёт timeout):
+Player B is updated symmetrically. Displayed changes are rounded to integers;
+calculations retain full precision.
+
+### Booking policy
+
+The scheduler runs on **Mondays and Fridays at 19:01 Europe/Moscow**, requesting
+one slot three days ahead, **19:00–21:30** on Thursday or Monday respectively.
+The regular duration is configured as `regular_minutes` in `booking-policy.json`.
+The room's published self-service limit is 90 minutes; the owner explicitly
+requested a single 150-minute attempt. A refusal is reported without silently
+shortening or splitting the slot.
+
+The configured room is `conf_mm_5_15@yandex-team.ru`. New meetings invite
+`klim-roma@yandex-team.ru` and `polyanskiy-mn@yandex-team.ru`. The meeting title
+is «Настольный теннис» and its description is empty. The integration uses the
+public Calendar API at `https://cloud-api.yandex.net/v1/calendar`.
+
+A created event is distinguished internally from a resource-confirmed booking:
+HTTP 201 or a room name alone does not prove acceptance. Missing resource
+metadata does not produce repeated chat warnings. Explicit refusals and
+cancellations update the original message. A lost creation response does not
+trigger a blind second POST, and conflicts never move the slot or alter someone
+else's booking.
+
+### How `/work` operates
+
+1. Classify and answer the request in a read-only stage using a snapshot of
+   tennis data. Questions do not create commits or deploy code.
+2. For changes, verify the sender's actual Telegram ID before starting an
+   isolated editor. The owner can modify all project code, including permissions,
+   the controller and deployment logic.
+3. Test a separate candidate under a dedicated Unix user without network,
+   production data or credentials. Failed tests return bounded, redacted
+   diagnostics for up to two repair attempts.
+4. Publish and deploy only a passing candidate. Check service startup and use a
+   guard to restore the previous code if controller startup fails, preserving
+   the game database. Report one final outcome.
+
+Infrastructure failures, timeouts, pushes and deployments are not blindly
+retried by the test-repair loop. See [work runner details](docs/work-runner.md).
+
+### Reliability and operations
+
+Incoming Telegram batches commit to SQLite before the polling offset advances.
+Jobs, votes, confirmed games, Elo updates and outgoing messages are persisted;
+replayed updates and recognized duplicate photos do not count games twice.
+SQLite uses FULL/WAL, services restart under systemd, and daily database backups
+retain 30 copies. The bridge has its own database, service and backup timer.
+
+OCR runs as a separate user through a Unix socket without access to the database
+or service credentials. Photo content is treated as data, not instructions.
+Secrets stay outside Git; the tennis service uses encrypted systemd credentials.
+
+Telegram has no `sendMessage` idempotency key: a crash after delivery but before
+recording success may duplicate a reply, although it does not duplicate games
+or Elo. Cropped or substantially re-encoded photos may evade fingerprint
+matching. Backups on the same disk do not protect against loss of the host.
+
+| Component | Location |
+| --- | --- |
+| Tennis runtime | `/opt/ttar` |
+| Tennis database / configuration | `/var/lib/ttar/history.sqlite3` / `/etc/ttar/config.json` |
+| Tennis services | `ttar-worker`, `ttar-ocr`, `ttar-maintenance` |
+| Tennis backups | `/var/backups/ttar` via `ttar-backup.timer` |
+| Bridge runtime / database | `/opt/tg-vk-bridge` / `/var/lib/tg-vk-bridge/history.sqlite3` |
+| Bridge service / backup timer | `tg-vk-bridge` / `tg-vk-bridge-backup.timer` |
+
+For direct transport configuration and deployment, see
+[direct-host deployment](docs/direct-host.md). Controller installation uses
+`scripts/install_maintenance.py --direct`; ordinary releases do not provision
+cloud resources. The bridge is deployed separately from tennis `/work` releases.
+
+### Development
+
+Use Python 3.12, as in the deployed runtime. From the repository root:
 
 ```bash
-.venv/bin/python scripts/enable_gateway_webhook.py
-```
-
-Скрипт создаёт/обновляет только наш API Gateway, проверяет secret и фильтр чата,
-приостанавливает наш таймер и включает webhook без удаления pending updates.
-При неудаче установки пытается восстановить минутный опрос. Публичный HTTP route
-принимает только Telegram updates и не открывает доступ к приватному relay.
-
-`deploy_cloud.py` — первоначальное создание ресурсов, он блокирует
-повторный переход текущей схемы к прямой связи VM с Telegram.
-Метаданные — `.deploy-state.json`; приватные локальные установочные файлы —
-`~/.config/ttar/` (0600), вне Git.
-
-Оценка расходов: две сохранённые версии Lockbox дают около 40 ₽/месяц хранения,
-плюс обращения к секрету и использование Functions/YMQ сверх бесплатных квот.
-Для небольшой группы ориентир 40–65 ₽/месяц; согласованный ранее ориентир
-бюджета 100 ₽/месяц не является автоматическим лимитом счета. Наличие и покрытие
-гранта владелец проверяет в Billing: cash balance 0 ₽ не доказывает остаток гранта.
-Codex использует лимиты ChatGPT; отдельный OpenAI API-ключ не подключён.
-
-Повторный вход recognizer при необходимости:
-
-```bash
-ssh -t ilya-grid-vm "sudo -u ttar-ocr env HOME=/var/lib/ttar-ocr CODEX_HOME=/var/lib/ttar-ocr/.codex sh -c 'cd /var/lib/ttar-ocr && exec /opt/ttar/bin/codex login --device-auth'"
-```
-
-## Как пользоваться
-
-Пришли фото. Бот перечислит только распознанные партии текстом с полными
-именами; имя победителя в каждой строке подчёркнуто. Под списком есть
-кнопки «Подтвердить · 0/2» и «Посчитать статистику», а также короткая подсказка.
-Нужны голоса двух разных участников группы. Первый голос обновляет подпись
-и кнопку до «1/2», повтор того же человека не добавляет голос. Второй голос
-записывает партии и показывает «2/2». Кнопка остаётся под списком; повторные
-нажатия после подтверждения не записывают партии ещё раз.
-Администратор также имеет один голос. Боты и вышедшие участники голосовать
-не могут; членство проверяется через облачный getChatMember. До второго
-голоса история и рейтинг не меняются. Счётчик обновляется в исходном сообщении,
-без отдельных сообщений на каждое нажатие. При изменении списка нужны два
-новых голоса за актуальную версию. Замечания OCR не блокируют кнопку или
-подтверждение: участники подтверждают именно перечисленные партии.
-Подтверждение пустого списка не добавляет игры и не меняет рейтинг.
-
-Команд всего две:
-
-- `/confirm` — отдать голос за последний черновик группы (основной способ — кнопка).
-- `/elo_graph` (или `/graph`) — два PNG-графика Эло Максима, Ильи, Ромы и Вали за всю историю: по датам (Москва, рейтинг на конец игрового дня) и по порядковым номерам партий (рейтинг после каждой игры, точка 0 — начальный рейтинг). У не участвовавших в партии игроков рейтинг остаётся прежним. Только подтверждённые активные партии. Доступны всем в группе.
-- `/stat N` — матрица по последним N подтверждённым активным партиям всей группы.
-  `/stat` использует N=1000. Можно также написать `посчитать стату 20` или `стата 20`.
-
-Игроки: М — Максим, И — Илья, Р — Рома, В — Валя. В каждом блоке сверху
-находятся 2–4 колонки игроков. Пары в строках определяются по цвету цифр,
-если заполнено больше двух колонок. Одна строка может содержать две партии.
-Порядок: весь левый блок сверху вниз, затем следующий справа сверху вниз;
-две партии одной строки — слева направо по позиции первого участника.
-Несколько блоков сами по себе не требуют ручного выбора. Итоги вроде 3:1
-или 14:6, перечёркнутые и неигровые строки исключаются. Нечитаемые пары не
-угадываются; замечания распознавания сохраняются в БД и не засоряют ответ.
-
-Поддержаны партии до 11 и до 21 с преимуществом в 2 очка. Если формат не
-подписан, завершённый счёт 21:x (x<=19) считается игрой до 21; продолженные
-счета с разницей 2 ниже 21 считаются игрой до 11. Счёт 21:19 без подписи
-формата неоднозначен между двумя форматами; для расчёта баланса принят
-вариант игры до 21. На Elo это различие не влияет.
-
-Матрица 4×4: строка — победитель, столбец — проигравший. Вне диагонали
-стоят количества побед в окне N. На диагонали — сумма баллов того же окна:
-победителю всегда +1, проигравшему −1 до баланса или 0 после баланса.
-Баланс: 10:10 в игре до 11, 20:20 в игре до 21. Elo каждого игрока
-показывается отдельно под матрицей и всегда рассчитывается по всей истории.
-Таблица отправляется Telegram HTML `<pre>`, чтобы столбцы не съезжали.
-
-Повтор фотографии не учитывается второй раз. Старый неподтверждённый
-черновик при повторной отправке автоматически перераспознаётся, если
-версия правил OCR обновилась. Старая кнопка подтверждения после этого
-отклоняется. Уже подтверждённые фото автоматически не перераспознаются.
-
-Команды изменения игроков, старых партий и аудит удалены из Telegram-
-интерфейса. Транзакционные исправления, отмена и аудит сохранены в Store
-для обслуживания на сервере; изменение подтверждённых результатов требует
-действия владельца сервиса. Источник, время, raw OCR и история пересчёта
-хранятся в БД, но не засоряют ответ на фото.
-
-## Установка контроллера
-
-После настройки отдельного GitHub deploy key с записью только в этот репозиторий
-и отдельного cloud release service account. На сервере требуются `bubblewrap`
-(`bwrap`) и доступные user namespaces; отключать sandbox при ошибке нельзя:
-
-```bash
-.venv/bin/python scripts/install_maintenance.py
-# На сервере, после публикации проверенного кода:
-sudo systemctl enable --now ttar-maintenance.service
-```
-
-Установщик читает Calendar OAuth из профиля владельца и `~/.stefania/customize.env`
-на сервере, передаёт его root через stdin и шифрует systemd-creds. Он не выводит
-секреты и не включает сервис до проверки оператором. Этот установщик нужен для первичной установки и восстановления. Владелец может
-обновлять код контроллера и через `/work`.
-
-## Надёжность
-
-Webhook отвечает после сохранения update в YMQ. Рабочий облачный poller подтверждает пакет через Telegram offset только после сохранения всех его updates в YMQ. При сбое очереди offset не сдвигается; повтор безопасен. На VM job сначала фиксируется SQLite FULL/WAL, затем удаляется из YMQ. Очередь хранит сообщения 14 дней; poison message после 5 доставок уходит в DLQ. Worker имеет один процесс (flock), отдельные потоки приёма, OCR и обработки команд. Outbox отправляет только поток команд. Максимум 3 попытки распознавания, timeout Codex 180 s, backoff 20/40 секунд. При рестарте `processing` возвращаются в `pending`.
-
-Отдельный Unix socket связывает worker и recognizer. Пользователи сервисов различаются, рабочая БД и ключи недоступны recognizer. shell, apps, hooks, plugins, web search, multi-agent и code mode выключены для `codex exec`; sandbox read-only, конфигурация пользователя не загружается. Неожиданный tool event отклоняет результат. Текст фотографии и любые попытки инструкций на ней рассматриваются как данные.
-
-Одна транзакция фиксирует подтверждённые партии, Elo, audit, outbox и завершение задания. Повтор update, callback или тот же `file_unique_id`, SHA-256 байтов или SHA-256 декодированных пикселей не меняет рейтинг второй раз. Telegram `sendMessage` сам не имеет idempotency key: авария между отправкой и отметкой outbox может дать повтор ответа, но не повтор игры/Elo. Изменение PNG-метаданных или повторная упаковка одинаковых пикселей также обнаруживаются. Фото, которое заново обрезали/существенно перекодировали, может получить другой fingerprint; перед подтверждением нужно проверить повторы результатов. В коде нет автоматического суммирования разных блоков.
-
-## Статус и журналы
-
-```bash
-ssh ilya-grid-vm 'sudo systemctl status ttar-worker ttar-ocr ttar-backup.timer --no-pager'
-ssh ilya-grid-vm 'sudo journalctl -u ttar-worker -u ttar-ocr -n 100 --no-pager'
-ssh ilya-grid-vm 'sudo -u ttar sh -c "cd /opt/ttar && .venv/bin/python -m ttar.admin status"'
-```
-
-Worker пишет только job ID, статус, класс ошибки, число попыток и безопасный Telegram error code. Provider stderr и Telegram API URL в журналы не попадают. Для проверки авторизации:
-
-```bash
-ssh ilya-grid-vm "sudo -u ttar-ocr env HOME=/var/lib/ttar-ocr CODEX_HOME=/var/lib/ttar-ocr/.codex sh -c 'cd /var/lib/ttar-ocr && /opt/ttar/bin/codex login status'"
-```
-
-При исчерпании лимитов подписки/ошибке авторизации фото останется в failed job без изменения Elo. После восстановления доступа повтор:
-
-```bash
-ssh ilya-grid-vm 'sudo -u ttar sh -c "cd /opt/ttar && .venv/bin/python -m ttar.admin retry UPDATE_ID"'
-```
-
-## Backup и восстановление
-
-Ручная согласованная SQLite-копия через backup API:
-
-```bash
-ssh ilya-grid-vm 'sudo systemctl start ttar-backup.service'
-ssh ilya-grid-vm 'sudo ls -lh /var/backups/ttar'
-```
-
-Скачивание копии на отдельный носитель (после данных операций Mac не нужен сервису):
-
-```bash
-ssh ilya-grid-vm 'sudo cat /var/backups/ttar/ИМЯ_КОПИИ.sqlite3' > tt-backup.sqlite3
-chmod 600 tt-backup.sqlite3
-```
-
-Копии на том же диске защищают от ошибки/повреждения БД, но не от утраты VM/диска. Внешнее постоянное хранилище backup пока не подключено и не включено в согласование расходов.
-
-Для восстановления администратор выбирает нужную копию, останавливает worker и таймер backup, сохраняет текущую БД, **включая WAL/SHM**, затем заменяет её backup и снова запускает сервис. Пример ниже выполняется вручную после выбора копии и согласования отката:
-
-```bash
-sudo systemctl stop ttar-worker.service ttar-backup.timer ttar-backup.service
-ttar_restore_dir="/var/lib/ttar/rollback-$(date -u +%Y%m%dT%H%M%S%N)"
-sudo install -d -m 0700 "$ttar_restore_dir"
-for ttar_db_file in history.sqlite3 history.sqlite3-wal history.sqlite3-shm; do
-  if sudo test -e "/var/lib/ttar/$ttar_db_file"; then
-    sudo mv "/var/lib/ttar/$ttar_db_file" "$ttar_restore_dir/"
-  fi
-done
-sudo install -o ttar -g ttar -m 0600 /var/backups/ttar/ИМЯ_КОПИИ.sqlite3 /var/lib/ttar/history.sqlite3
-sudo -u ttar /opt/ttar/.venv/bin/python -c 'import sqlite3; c=sqlite3.connect("/var/lib/ttar/history.sqlite3"); print(c.execute("PRAGMA integrity_check").fetchone()[0])'
-sudo systemctl start ttar-worker.service ttar-backup.timer
-```
-
-Откат к старому backup может восстановить pending outbox и потерять уже принятые после backup updates, удалённые из YMQ. Перед возвратом в работу сверить журнал и сообщения Telegram; не подтверждать повторно старые игры вслепую.
-
-## Проверки до приёмки
-
-```bash
-cd /Users/ilya-grid/tt-rating-bot
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements-dev.txt
 .venv/bin/python -m pytest -q
 ```
 
-Нужно дополнительно:
+Production also requires Linux/systemd, authenticated Codex OCR, Telegram and
+Calendar credentials, a repository-scoped GitHub deploy key, and bubblewrap with
+working user namespaces for `/work`. The test commands above do not set up a
+production bot. Bridge dependencies are in `bridge/requirements.txt`.
 
-1. Проверить работу `ttar-ocr` через его Unix socket под systemd после отдельного входа.
-2. Согласовать и развернуть облако, проверить неправильный secret (403), чужой чат (ignored), доступ основной очереди с VM, metadata webhook.
-3. Отправить новую реальную фотографию в TT, получить черновик, проверить партии и явно подтвердить. Тестовые результаты не подтверждать в production.
-4. Повторно отправить ту же фотографию и нажать подтверждение повторно: счётчик игр и Elo должны остаться прежними.
-5. Закрыть локальную SSH/Codex-сессию, выключить Mac и отправить ещё одну фотографию: черновик должен появиться автоматически. Этот acceptance test пока не выполнен.
+Tests cover game rules, Elo, recognition handling, confirmation votes,
+deduplication, statistics and graphs, booking policies, the work/release
+pipeline and direct transport. The migration was additionally checked with real
+message delivery in both directions, photo recognition, service restarts and
+preservation of game history.
 
-## Официальные источники
+Operational background, older recovery procedures and the retired cloud design
+are preserved in the [archived Russian README](docs/legacy-readme.md). Its cloud
+commands, resource IDs, prices and acceptance checklist are historical.
 
-- [Codex authentication](https://learn.chatgpt.com/docs/auth)
-- [Codex non-interactive mode / structured output](https://learn.chatgpt.com/docs/non-interactive-mode)
-- [Codex CLI commands / image input](https://learn.chatgpt.com/docs/developer-commands?surface=cli)
-- [Telegram Bot API](https://core.telegram.org/bots/api)
-- [Cloud Functions pricing](https://yandex.cloud/ru/docs/functions/pricing)
-- [Message Queue pricing](https://yandex.cloud/en/docs/message-queue/pricing)
-- [YMQ access roles](https://yandex.cloud/ru/docs/message-queue/security/)
-- [Lockbox pricing](https://yandex.cloud/ru/docs/lockbox/pricing)
-- [Lockbox secrets in Functions](https://yandex.cloud/en/docs/functions/operations/function/lockbox-secret-transmit)
+---
+
+<a id="russian"></a>
+## Русский
+
+Telegram-бот для компании, которая играет в настольный теннис: превращает фото
+рукописного счёта в подтверждённые результаты, рейтинг Elo и статистику личных
+встреч. Также бронирует зал и поддерживает вопросы и изменения кода через
+AI-процесс `/work`.
+
+Стек: Python, SQLite, systemd, Codex OCR, Telegram API и Calendar API.
+В репозитории также находится отдельно развёрнутый мост Telegram ↔ VK.
+Интерфейс бота в Telegram — на русском.
+
+### Возможности
+
+- **Распознавание фотографий.** Несколько блоков с инициалами и счётом,
+  определение пар по цвету цифр, если в строке больше двух игроков, исключение
+  итогов. Порядок — сверху вниз внутри блока, затем слева направо между блоками.
+  Поддерживаются партии до 11 и до 21.
+- **Подтверждение двумя участниками.** Текстовый список с подчёркнутыми
+  победителями и округлёнными изменениями Elo рядом с именами. Результаты
+  попадают в историю после двух разных голосов. Счётчик обновляется в исходном
+  сообщении, повторные нажатия не добавляют игры заново. Замечания OCR не
+  скрывают кнопку подтверждения.
+- **Статистика и графики.** Матрица личных встреч 4×4 за последние N игр
+  (по умолчанию 1000), отдельные баллы с учётом баланса и Elo за всю историю.
+  Два PNG-графика: рейтинг по датам Москвы и после каждой подтверждённой партии.
+- **Бронирование зала.** Расписание, приглашение участников, ручное создание
+  и отмена, ссылка на встречу. Одно исходное сообщение, которое обновляется
+  при существенном изменении статуса.
+- **Доработки через AI.** Ответы на вопросы об играх и рейтингах либо изменение
+  бота по просьбе владельца: тесты, публикация в GitHub и развёртывание.
+  В чат приходит только финальный результат.
+
+### Архитектура
+
+С **10 октября 2026 года** оба бота работают на `ilya-grid-vm` без сервисов
+Yandex Cloud. Telegram подключён напрямую через long polling и DNS/IPv6;
+мост получает события VK через Groups Long Poll. Mac и открытая SSH-сессия
+для работы не нужны. Общая схема приведена в английской части выше.
+
+Платные ресурсы прежней облачной схемы удалены. Текущая установка использует
+существующую рабочую VM и доступ к ChatGPT — это отдельные зависимости,
+не расходы на ресурсы Yandex Cloud.
+
+### Как пользоваться
+
+Пришли фото, проверь список и нажми **«Подтвердить»**. Нужны два разных участника.
+До второго голоса изменения Elo предварительные. Игроки: М — Максим,
+И — Илья, Р — Рома, В — Валя.
+
+| Команда | Действие |
+| --- | --- |
+| `/confirm` | Голос за последний черновик группы; обычно используется кнопка под списком. |
+| `/stat N` | Статистика последних N подтверждённых активных партий; по умолчанию 1000. |
+| `/elo_graph` или `/graph` | Графики Elo за всю историю по датам и номерам партий. |
+| `/elo_chase` | Сколько побед подряд Илье нужно над Максимом для строгого обгона в Elo, если других игр нет. Рейтинг не меняется. |
+| `/work вопрос или задача` | Вопросы доступны всем участникам; изменения кода, настроек и прав — только владельцу с проверенным Telegram ID. |
+| `/create_booking YYYY-MM-DD HH:MM MINUTES` | Попытка брони, только для владельца. Ручная длительность — 60 минут по умолчанию, максимум 90. Без аргументов — ближайший понедельник или четверг в 19:00. |
+| `/cancel_booking YYYY-MM-DD HH:MM` | Отмена нашей встречи, только для владельца. Время можно опустить, если бронь в этот день одна; без аргументов выбирается ближайшая будущая бронь. |
+
+В матрице **строка — победитель, столбец — проигравший**. Вне диагонали —
+количество побед в выбранном окне. На диагонали — сумма баллов игрока:
+за победу +1, за поражение до баланса −1, после баланса 0.
+Баланс — 10:10 для партий до 11 и 20:20 для партий до 21.
+Счёт 21:19 без подписи формата для этой метрики считается партией до 21.
+
+Elo выводится отдельно и считается по всей подтверждённой истории независимо
+от N. Начальный рейтинг — **1000**, по умолчанию **K = 32**. После каждой партии:
+
+```text
+E_A = 1 / (1 + 10^((R_B - R_A) / 400))
+R_A_new = R_A + K × (S_A - E_A)
+S_A = 1 при победе, 0 при поражении
+```
+
+Рейтинг второго игрока меняется симметрично. В сообщениях изменения округляются
+до целых, расчёты сохраняют полную точность.
+
+### Правила бронирования
+
+Автоматическая попытка — **в понедельник и пятницу в 19:01 Europe/Moscow**,
+на три дня вперёд: соответственно четверг и понедельник, **19:00–21:30**,
+одной заявкой. Длительность задаётся полем `regular_minutes` в
+`booking-policy.json`. По паспорту самостоятельная бронь ограничена 90 минутами;
+владелец явно запросил попытку на 150 минут. При отказе слот не сокращается
+и не делится автоматически.
+
+Зал: `conf_mm_5_15@yandex-team.ru`. Приглашённые:
+`klim-roma@yandex-team.ru` и `polyanskiy-mn@yandex-team.ru`.
+Название встречи — «Настольный теннис», описание пустое.
+Используется публичный Calendar API: `https://cloud-api.yandex.net/v1/calendar`.
+
+Внутри системы создание встречи отличается от подтверждения ресурсом:
+HTTP 201 или название зала сами по себе не доказывают принятие брони.
+Отсутствие метаданных ресурса не порождает повторных предупреждений в чате.
+Явный отказ и отмена обновляют исходное сообщение. Потеря ответа создания
+не запускает второй POST вслепую; конфликт не меняет время и чужие брони.
+
+### Как работает `/work`
+
+1. Разбор запроса и ответ в режиме чтения по снимку теннисных данных.
+   Вопросы не создают коммиты и не запускают развёртывание.
+2. Перед изменениями проверяется реальный Telegram ID отправителя.
+   Владелец может менять весь код, включая права, контроллер и выпуск версий.
+3. Отдельная копия проверяется под выделенным Unix-пользователем без сети,
+   рабочей БД и секретов. При падении тестов исполнитель получает ограниченную
+   диагностику с маскированием секретов и до двух попыток исправления.
+4. Только прошедшая проверки версия публикуется и развёртывается.
+   Проверяется запуск сервисов; при сбое старта контроллера отдельный guard
+   восстанавливает предыдущий код, сохраняя БД игр. В чат приходит один итог.
+
+Сбои инфраструктуры, таймауты, публикация и развёртывание не повторяются вслепую
+в цикле исправления тестов. Подробности: [work runner](docs/work-runner.md).
+
+### Надёжность и эксплуатация
+
+Пакет Telegram updates сохраняется в SQLite до продвижения offset.
+Задания, голоса, игры, изменения Elo и исходящие сообщения сохраняются;
+повторные updates и распознанные дубли фотографий не добавляют игры заново.
+SQLite работает в FULL/WAL, сервисы перезапускает systemd, ежедневные резервные
+копии БД хранятся в количестве 30 штук. У моста отдельные БД, сервис и таймер копий.
+
+OCR работает от отдельного пользователя через Unix socket, без доступа к БД
+и сервисным ключам. Текст фото рассматривается как данные, а не инструкции.
+Секреты находятся вне Git; теннисный сервис использует зашифрованные systemd
+credentials.
+
+У Telegram `sendMessage` нет ключа идемпотентности: авария после доставки,
+но до записи успеха может дать повтор ответа, однако не игры или Elo.
+Обрезанное или существенно перекодированное фото может обойти проверку
+дубликатов. Копии на том же диске не защищают от потери всей VM.
+
+| Компонент | Расположение |
+| --- | --- |
+| Код теннисного бота | `/opt/ttar` |
+| БД / конфигурация | `/var/lib/ttar/history.sqlite3` / `/etc/ttar/config.json` |
+| Сервисы теннисного бота | `ttar-worker`, `ttar-ocr`, `ttar-maintenance` |
+| Резервные копии | `/var/backups/ttar`, таймер `ttar-backup.timer` |
+| Код / БД моста | `/opt/tg-vk-bridge` / `/var/lib/tg-vk-bridge/history.sqlite3` |
+| Сервис / таймер копий моста | `tg-vk-bridge` / `tg-vk-bridge-backup.timer` |
+
+Настройка прямого транспорта: [direct-host deployment](docs/direct-host.md).
+Контроллер устанавливается через `scripts/install_maintenance.py --direct`;
+обычные обновления не создают облачные ресурсы. Мост развёртывается отдельно
+от обновлений теннисного бота через `/work`.
+
+### Разработка
+
+Используется Python 3.12, как на рабочем сервере. Из корня репозитория:
+
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements-dev.txt
+.venv/bin/python -m pytest -q
+```
+
+Для рабочего бота дополнительно нужны Linux/systemd, авторизация Codex OCR,
+ключи Telegram и Calendar, GitHub deploy key для этого репозитория,
+а для `/work` — bubblewrap с работающими user namespaces.
+Команды выше устанавливают окружение тестов, а не рабочий бот.
+Зависимости моста находятся в `bridge/requirements.txt`.
+
+Тесты покрывают правила игр, Elo, обработку распознавания, голоса,
+дедупликацию, статистику и графики, правила бронирования, процесс `/work`
+и выпуска версий, прямой транспорт. При переносе дополнительно проверены
+реальная доставка сообщений в обе стороны, OCR, перезапуск сервисов
+и сохранность истории игр.
+
+Предыдущие эксплуатационные заметки, процедуры восстановления и облачная схема
+сохранены в [архиве README](docs/legacy-readme.md). Облачные команды, ID ресурсов,
+цены и приёмочный чеклист в архиве относятся к прежней установке.
