@@ -37,9 +37,9 @@ def test_diagonal_balance_and_winner_row_loser_column(store):
     assert count == 4
     assert [matrix[i][i] for i in range(4)] == [1, 0, 1, 0]
     assert matrix[0][1] == matrix[1][0] == matrix[2][3] == matrix[3][2] == 1
-    assert ratings[:2] == list(elo(*elo(1000,1000,0),1))
+    assert ratings[:2] == list(elo(*elo(0,0,0),1))
     text, _ = statistics(store)
-    assert 'Диагональ — баланс: победы минус поражения' in text
+    assert 'Диагональ — баланс игрока: победы минус поражения' in text
     assert 'поражения в партиях с балансом (например, 12:10 или 22:20) не вычитаются' in text
     assert 'Elo · вся история' in text and '<pre>' in text and 'учтено 4' in text
 

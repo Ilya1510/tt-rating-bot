@@ -48,7 +48,7 @@ def test_confirm_is_idempotent_and_scores_pair(store):
         assert not approve(store,p, 1,42,True)
     assert store.db.execute('SELECT count(*) FROM games').fetchone()[0] == 1
     ratings = store.db.execute('SELECT * FROM ratings ORDER BY player_id').fetchall()
-    assert [(r['rating'], r['wins'], r['losses']) for r in ratings] == [(1016, 1, 0), (984, 0, 1)]
+    assert [(r['rating'], r['wins'], r['losses']) for r in ratings] == [(16, 1, 0), (-16, 0, 1)]
 
 
 def test_photo_dedup_by_unique_and_hash(store):
@@ -79,12 +79,12 @@ def test_recalculate_after_old_game_undo_and_edit(store):
         p2 = photo(store, 'two', 200, raw(score=(8, 11)))
         approve(store,p2, 1,42,True)
         before = store.db.execute('SELECT rating FROM ratings WHERE player_id=1').fetchone()[0]
-        assert before != 984
+        assert before != -16
         assert store.amend(1, 9, True)
-        assert store.db.execute('SELECT rating FROM ratings WHERE player_id=1').fetchone()[0] == 984
+        assert store.db.execute('SELECT rating FROM ratings WHERE player_id=1').fetchone()[0] == -16
         assert not store.amend(1, 9, True)
         store.amend(2, 9, True, ['М', 'И', 11, 8])
-        assert store.db.execute('SELECT rating FROM ratings WHERE player_id=1').fetchone()[0] == 1016
+        assert store.db.execute('SELECT rating FROM ratings WHERE player_id=1').fetchone()[0] == 16
         assert store.db.execute('SELECT count(*) FROM audit WHERE action IN (?,?)', ('undo', 'edit')).fetchone()[0] == 2
 
 
@@ -142,7 +142,7 @@ def test_late_confirmation_replays_chronologically(store):
         approve(store,later, 1,42,True)
         earlier = photo(store, 'earlier', 100)
         approve(store,earlier, 1,42,True)
-    after_first = elo(1000, 1000, 0)
+    after_first = elo(0, 0, 0)
     after_second = elo(*after_first, 1)
     assert store.db.execute('SELECT rating FROM ratings WHERE player_id=1').fetchone()[0] == after_second[0]
 
@@ -168,7 +168,7 @@ def test_same_second_games_order_by_telegram_message(store):
         approve(store,later, 1,42,True)
         earlier, _ = store.put_photo(-123, 400, 'earlier', 'h-earlier', 100, 42, raw())
         approve(store,earlier, 1,42,True)
-    assert store.db.execute('SELECT rating FROM ratings WHERE player_id=1').fetchone()[0] == elo(*elo(1000,1000,0),1)[0]
+    assert store.db.execute('SELECT rating FROM ratings WHERE player_id=1').fetchone()[0] == elo(*elo(0,0,0),1)[0]
 
 
 def test_alias_and_telegram_identity(store):
@@ -188,4 +188,4 @@ def test_configurable_match_model(tmp_path):
     with s.transaction():
         p = photo(s, data=raw(score=(3, 1)))
         approve(s,p, 1,42,True)
-    assert s.db.execute('SELECT rating FROM ratings WHERE player_id=1').fetchone()[0] == 1008
+    assert s.db.execute('SELECT rating FROM ratings WHERE player_id=1').fetchone()[0] == 8

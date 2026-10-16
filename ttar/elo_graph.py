@@ -20,12 +20,12 @@ def _game_history(store, roster):
             'WHERE g.active=1 ORDER BY g.occurred_at,p.message_id,g.ordinal,g.id'):
         day = datetime.fromtimestamp(game['occurred_at'], ZoneInfo('Europe/Moscow')).date()
         if not history:
-            history.append((day - timedelta(days=1), [1000.] * len(ids)))
+            history.append((day - timedelta(days=1), [0.] * len(ids)))
         a, b = game['a'], game['b']
-        ratings[a], ratings[b] = elo(ratings.get(a, 1000.), ratings.get(b, 1000.),
+        ratings[a], ratings[b] = elo(ratings.get(a, 0.), ratings.get(b, 0.),
                                    0 if game['score_a'] > game['score_b'] else 1,
                                    float(store.setting('k')))
-        history.append((day, [ratings.get(pid, 1000.) for pid in ids]))
+        history.append((day, [ratings.get(pid, 0.) for pid in ids]))
     return history
 
 
@@ -37,6 +37,15 @@ def game_history(store, roster):
     """Point zero is the initial rating; each next point is one active game."""
     return [(number, values) for number, (_, values) in
             enumerate(_game_history(store, roster))]
+
+
+def elo_integrals(history, player_count):
+    """Signed area of the full, unsmoothed all-games graph, using trapezoids."""
+    areas = [0.] * player_count
+    for (x0, y0), (x1, y1) in zip(history, history[1:]):
+        for i in range(player_count):
+            areas[i] += (x1 - x0) * (y0[i] + y1[i]) / 2
+    return areas
 
 
 COLORS = ('#ff0000', '#008000', '#000000', '#0000ff')

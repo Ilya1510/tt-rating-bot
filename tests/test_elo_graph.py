@@ -27,13 +27,13 @@ def test_history_order_daily_totals_and_undo(tmp_path):
     approve(store, earlier, 1)
     history = daily_history(store, ROSTER)
     assert [day for day, _ in history] == [date(1970, 1, 1), date(1970, 1, 2), date(1970, 1, 3)]
-    assert history[0][1] == [1000] * 4
-    assert history[1][1] == [1016, 984, 1000, 1000]
-    assert history[-1][1] == [1016, 984, 1016, 984]
+    assert history[0][1] == [0] * 4
+    assert history[1][1] == [16, -16, 0, 0]
+    assert history[-1][1] == [16, -16, 16, -16]
     store.db.execute('UPDATE games SET active=0 WHERE photo_id=?', (earlier,))
     store.recalculate()
-    assert daily_history(store, ROSTER)[-1][1] == [1000, 1000, 1016, 984]
-    assert game_history(store, ROSTER) == [(0, [1000] * 4), (1, [1000, 1000, 1016, 984])]
+    assert daily_history(store, ROSTER)[-1][1] == [0, 0, 16, -16]
+    assert game_history(store, ROSTER) == [(0, [0] * 4), (1, [0, 0, 16, -16])]
     assert store.photo(draft)['status'] == 'draft'
     store.db.close()
 
@@ -49,15 +49,15 @@ def test_same_day_and_final_ratings(tmp_path):
     assert len(history) == 2
     games = game_history(store, ROSTER)
     assert [number for number, _ in games] == [0, 1, 2]
-    assert games[0][1] == [1000] * 4
-    assert games[1][1] == [1016, 984, 1000, 1000]
+    assert games[0][1] == [0] * 4
+    assert games[1][1] == [16, -16, 0, 0]
     assert games[2][1] == history[-1][1]
     assert games[2][1][0] < games[1][1][0]
     assert games[2][1][1] > games[1][1][1]
     assert games[2][1][2:] == games[1][1][2:]
     for i, (alias, _) in enumerate(ROSTER):
         row = store.db.execute('SELECT rating FROM ratings WHERE player_id=?', (store.player(alias),)).fetchone()
-        assert history[-1][1][i] == pytest.approx(row[0] if row else 1000)
+        assert history[-1][1][i] == pytest.approx(row[0] if row else 0)
     store.db.close()
 
 
@@ -238,3 +238,45 @@ def test_album_relay_and_transport(monkeypatch):
 def test_album_rejects_invalid_images(encoded):
     with pytest.raises(ValueError):
         request_body({'media': [{'type': 'photo', 'photo_base64': encoded}]})
+
+
+def test_integral_full_history_statistics_and_undo(tmp_path):
+    from ttar.bot import statistics
+    from ttar.elo_graph import elo_integrals
+    store = Store(tmp_path / 'integral.db')
+    store.db.execute("UPDATE settings SET value='true' WHERE key='configured'")
+    for alias, name in ROSTER:
+        store.add_player(alias, name, None, 9)
+    assert elo_integrals([], 4) == [0] * 4
+    first = photo(store, 'first', at=86400)
+    approve(store, first, 1)
+    second = photo(store, 'second', at=172800, data=raw('Р', 'В'))
+    approve(store, second, 1)
+    assert elo_integrals(game_history(store, ROSTER), 4) == [24, -24, 8, -8]
+    text, _ = statistics(store, 1)
+    assert 'учтено 1' in text
+    assert 'Диагональ — баланс игрока:' in text
+    assert 'старт 0' in text
+    for name, rating, area in zip([name for _, name in ROSTER], [16, -16, 16, -16], [24, -24, 8, -8]):
+        assert f'{name}: {rating} · интеграл Elo: {area:.1f}' in text
+    store.db.execute('UPDATE games SET active=0 WHERE photo_id=?', (first,))
+    store.recalculate()
+    assert elo_integrals(game_history(store, ROSTER), 4) == [0, 0, 8, -8]
+
+
+def test_zero_baseline_upgrade_is_idempotent(tmp_path):
+    path = tmp_path / 'upgrade.db'
+    store = Store(path)
+    store.db.execute("UPDATE settings SET value='true' WHERE key='configured'")
+    approve(store, photo(store), 1)
+    store.db.execute('UPDATE ratings SET rating=rating+1000')
+    store.db.execute('UPDATE games SET rating_a_before=1000,rating_b_before=1000,rating_a_after=1016,rating_b_after=984')
+    store.db.execute("DELETE FROM settings WHERE key='elo_zero_baseline'")
+    store.db.close()
+    for _ in range(2):
+        store = Store(path)
+        assert [r[0] for r in store.db.execute('SELECT rating FROM ratings ORDER BY player_id')] == [16, -16]
+        game = store.db.execute('SELECT * FROM games').fetchone()
+        assert [game[k] for k in ('rating_a_before', 'rating_b_before', 'rating_a_after', 'rating_b_after')] == [0, 0, 16, -16]
+        assert store.db.execute('SELECT count(*) FROM games').fetchone()[0] == 1
+        store.db.close()

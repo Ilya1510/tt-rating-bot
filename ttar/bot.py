@@ -83,7 +83,7 @@ def game_lines(store, pid, *, budget=False, include_elo=True, totals=None):
                     photo['occurred_at'], photo['message_id'], pid):
                 continue
             a, b = row['a'], row['b']
-            ratings[a], ratings[b] = elo(ratings.get(a, 1000.), ratings.get(b, 1000.),
+            ratings[a], ratings[b] = elo(ratings.get(a, 0.), ratings.get(b, 0.),
                                        0 if row['score_a'] > row['score_b'] else 1,
                                        float(store.setting('k')))
     lines = []
@@ -96,7 +96,7 @@ def game_lines(store, pid, *, budget=False, include_elo=True, totals=None):
         change_a = change_b = ''
         da = db = 0.
         if photo['status'] == 'draft':
-            before_a, before_b = ratings.get(a, 1000.), ratings.get(b, 1000.)
+            before_a, before_b = ratings.get(a, 0.), ratings.get(b, 0.)
             ratings[a], ratings[b] = elo(before_a, before_b, 0 if sa > sb else 1,
                                        float(store.setting('k')))
             da, db = ratings[a] - before_a, ratings[b] - before_b
@@ -204,7 +204,7 @@ def matrix_values(store, window):
     for i, pid in enumerate(ids):
         wins[i][i] = balance[i]
         row = store.db.execute('SELECT rating FROM ratings WHERE player_id=?', (pid,)).fetchone()
-        ratings.append(row[0] if row else 1000.)
+        ratings.append(row[0] if row else 0.)
     return wins, ratings, len(games)
 
 
@@ -216,8 +216,15 @@ def statistics(store, window=1000):
     table = '\n'.join(' '.join(cell.ljust(widths[i]) if i == 0 else cell.rjust(widths[i])
                               for i, cell in enumerate(row)).rstrip() for row in cells)
     text = f'Последние {window} партий · учтено {count}\n<pre>{html.escape(table)}</pre>'
-    text += '\nСтрока — победитель, столбец — проигравший. Диагональ — баланс: победы минус поражения; поражения в партиях с балансом (например, 12:10 или 22:20) не вычитаются.'
-    text += '\n\nElo · вся история\n' + '\n'.join(f'{name}: {rating:.0f}' for name, rating in zip(names, ratings))
+    text += '\nСтрока — победитель, столбец — проигравший. Диагональ — баланс игрока: победы минус поражения; поражения в партиях с балансом (например, 12:10 или 22:20) не вычитаются.'
+    from .elo_graph import game_history, elo_integrals
+    integrals = elo_integrals(game_history(store, ROSTER), len(ROSTER))
+    text += '\n\nElo · вся история · старт 0\n' + '\n'.join(
+        f'{name}: {rating:.0f} · интеграл Elo: {area:.1f}'
+        for name, rating, area in zip(names, ratings, integrals))
+    text += ('\nИнтеграл — площадь под графиком all games (трапеции, Elo × партии); '
+             'учтены все общие партии, включая партии других игроков. '
+             'Метрика отражает длительность преимущества, а не только текущую силу.')
     return text, None
 
 
@@ -228,7 +235,7 @@ def elo_chase(store):
     for alias in ('И', 'М'):
         pid = store.player(alias)
         row = store.db.execute('SELECT rating FROM ratings WHERE player_id=?', (pid,)).fetchone()
-        ratings.append(row[0] if row else 1000.)
+        ratings.append(row[0] if row else 0.)
     ilya, max_rating = ratings
     wins = 0
     k = float(store.setting('k'))

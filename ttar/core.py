@@ -75,6 +75,13 @@ class Store:
                          ('stats_window', '1000'), ('roster_configured', 'false')]:
             self.db.execute('INSERT OR IGNORE INTO settings VALUES (?,?)', (key, val))
 
+        # Upgrade the stored history atomically from the former 1000 baseline.
+        with self.transaction():
+            if not self.db.execute("SELECT 1 FROM settings WHERE key='elo_zero_baseline'").fetchone():
+                if self.db.execute('SELECT 1 FROM ratings LIMIT 1').fetchone() or self.db.execute('SELECT 1 FROM games LIMIT 1').fetchone():
+                    self.recalculate()
+                self.db.execute("INSERT INTO settings VALUES ('elo_zero_baseline','true')")
+
     @contextlib.contextmanager
     def transaction(self):
         self.db.execute('BEGIN IMMEDIATE')
@@ -269,7 +276,7 @@ class Store:
         return True
 
     def recalculate(self):
-        values = {r[0]: [1000., 0, 0] for r in self.db.execute('SELECT id FROM players')}
+        values = {r[0]: [0., 0, 0] for r in self.db.execute('SELECT id FROM players')}
         self.db.execute('DELETE FROM ratings')
         for game in self.db.execute('SELECT g.* FROM games g JOIN photos p ON p.id=g.photo_id WHERE g.active=1 ORDER BY g.occurred_at,p.message_id,g.ordinal,g.id').fetchall():
             a, b = values[game['a']], values[game['b']]
