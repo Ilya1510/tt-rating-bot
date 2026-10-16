@@ -39,20 +39,79 @@ def game_history(store, roster):
             enumerate(_game_history(store, roster))]
 
 
-def render_graph(history, *, by_game=False):
+COLORS = ('#ff0000', '#008000', '#000000', '#0000ff')
+
+
+def smooth_history(history):
+    """Sample block-end ratings, including zero and the final partial block."""
+    games = len(history) - 1
+    step = max(1, (games + 298) // 299)
+    indices = [0, *range(step, len(history), step)]
+    if indices[-1] != games:
+        indices.append(games)
+    return [history[i] for i in indices]
+
+
+def peak_indices(history, player):
+    # Only personal games count toward win/loss streaks and extrema windows.
+    personal = [0] + [i for i in range(1, len(history))
+                      if history[i][1][player] != history[i - 1][1][player]]
+    values = [history[i][1][player] for i in personal]
+    peaks = []
+    for j in range(2, len(values) - 2):
+        a, b, c, d, e = values[j - 2:j + 3]
+        reversal = a < b < c > d > e or a > b > c < d < e
+        strict = False
+        if 5 <= j < len(values) - 5:
+            neighbors = values[j - 5:j] + values[j + 1:j + 6]
+            strict = c > max(neighbors) or c < min(neighbors)
+        if reversal or strict:
+            peaks.append(personal[j])
+    return peaks
+
+
+def session_history(store, roster, today=None):
+    """Today in Moscow, or the latest active photo when today has no games."""
+    today = today or datetime.now(ZoneInfo('Europe/Moscow')).date()
+    games = store.db.execute(
+        'SELECT g.* FROM games g JOIN photos p ON p.id=g.photo_id '
+        'WHERE g.active=1 ORDER BY g.occurred_at,p.message_id,g.ordinal,g.id').fetchall()
+    if not games:
+        return [], [], False
+    selected = [i for i, g in enumerate(games)
+                if datetime.fromtimestamp(g['occurred_at'], ZoneInfo('Europe/Moscow')).date() == today]
+    is_today = bool(selected)
+    if not selected:
+        selected = [i for i, g in enumerate(games) if g['photo_id'] == games[-1]['photo_id']]
+    participants = {pid for i in selected for pid in (games[i]['a'], games[i]['b'])}
+    players = []
+    for i, (alias, _) in enumerate(roster):
+        row = store.db.execute('SELECT player_id FROM aliases WHERE alias=?',
+                               (alias.casefold(),)).fetchone()
+        if row and row[0] in participants:
+            players.append(i)
+    history = game_history(store, roster)
+    result = [(0, history[selected[0]][1])]
+    result.extend((n, history[i + 1][1]) for n, i in enumerate(selected, 1))
+    return result, players, is_today
+
+
+def render_graph(history, *, by_game=False, players=None, all_points=False):
     image = Image.new('RGB', (1200, 720), 'white')
     draw = ImageDraw.Draw(image)
     font = ImageFont.load_default(size=22)
     small = ImageFont.load_default(size=17)
-    colors = ['#2474c4', '#df6933', '#289454', '#964fc4']
+    colors = COLORS
+    players = list(range(4)) if players is None else players
     title = 'Elo history / ratings after each game' if by_game else 'Elo history / daily ratings (Moscow)'
     draw.text((90, 20), title, fill='#222222', font=font)
-    for i, (name, color) in enumerate(zip(('Maxim', 'Ilya', 'Roma', 'Valya'), colors)):
-        x = 90 + i * 265
+    for slot, i in enumerate(players):
+        name, color = ('Maxim', 'Ilya', 'Roma', 'Valya')[i], colors[i]
+        x = 90 + slot * 265
         draw.line((x, 70, x + 32, 70), fill=color, width=4)
         draw.text((x + 42, 57), name, fill=color, font=font)
-    low = min(min(values) for _, values in history) - 20
-    high = max(max(values) for _, values in history) + 20
+    low = min(values[i] for _, values in history for i in players) - 20
+    high = max(values[i] for _, values in history for i in players) + 20
     start, end = history[0][0], history[-1][0]
     days = max(1, end - start if by_game else (end - start).days)
     def point(day, rating):
@@ -71,10 +130,17 @@ def render_graph(history, *, by_game=False):
         draw.text((x - 45, 622), str(day) if by_game else day.isoformat(), fill='#333333', font=small)
     draw.text((15, 95), 'Elo', fill='#222222', font=font)
     draw.text((565, 675), 'Game number' if by_game else 'Date', fill='#222222', font=font)
-    for i, color in enumerate(colors):
-        points = [point(day, values[i]) for day, values in history]
-        draw.line(points, fill=color, width=3)
-        for x, y in points:
+    line_history = smooth_history(history) if by_game and not all_points else history
+    for i in players:
+        color = colors[i]
+        points = [point(day, values[i]) for day, values in line_history]
+        if len(points) > 1:
+            draw.line(points, fill=color, width=3)
+        marked = (peak_indices(history, i) if by_game and not all_points
+                  else range(len(history)))
+        for index in marked:
+            day, values = history[index]
+            x, y = point(day, values[i])
             draw.ellipse((x - 3, y - 3, x + 3, y + 3), fill=color)
     out = BytesIO()
     image.save(out, format='PNG')
