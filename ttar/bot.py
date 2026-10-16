@@ -57,44 +57,14 @@ def draft_footer(store, pid):
 
 
 def elo_summary(store, pid):
-    """Sum unrounded changes, replaying drafts without recording any games."""
-    current = store.photo(pid)
-    totals, ratings = {}, {}
-    preliminary = False
-    count = 0
-    for photo in store.db.execute(
-            'SELECT * FROM photos WHERE chat_id=? ORDER BY occurred_at,message_id,id',
-            (current['chat_id'],)):
-        if (photo['occurred_at'], photo['message_id'], photo['id']) > (
-                current['occurred_at'], current['message_id'], pid):
-            break
-        if photo['status'] == 'draft':
-            games = json.loads(photo['proposal'])
-            preliminary = preliminary or bool(games)
-        else:
-            games = [(g['a'], g['b'], g['score_a'], g['score_b']) for g in store.db.execute(
-                'SELECT * FROM games WHERE photo_id=? AND active=1 ORDER BY ordinal,id',
-                (photo['id'],))]
-        for a, b, sa, sb in games:
-            before_a, before_b = ratings.get(a, 1000.), ratings.get(b, 1000.)
-            ratings[a], ratings[b] = elo(before_a, before_b, 0 if sa > sb else 1,
-                                       float(store.setting('k')))
-            for player, delta in ((a, ratings[a] - before_a), (b, ratings[b] - before_b)):
-                totals[player] = totals.get(player, 0.) + delta
-            count += 1
+    """Sum unrounded changes for this photo."""
+    totals = {}
+    game_lines(store, pid, totals=totals)
     if not totals:
         return ''
-    def lines(values):
-        return '\n'.join(f'{html.escape(store.name(player))}: {delta:+.0f}'
-                         for player, delta in values.items())
-    sections = []
-    local = {}
-    game_lines(store, pid, totals=local)
-    if local:
-        sections.append('Суммарный дифф Elo за фото:\n' + lines(local))
-    label = ' (предварительно)' if preliminary else ''
-    sections.append(f'Суммарный дифф Elo за все фото · {count} партий{label}:\n' + lines(totals))
-    return '\n\n'.join(sections)
+    return 'Суммарный дифф Elo за фото:\n' + '\n'.join(
+        f'{html.escape(store.name(player))}: {delta:+.0f}'
+        for player, delta in totals.items())
 
 
 def game_lines(store, pid, *, budget=False, include_elo=True, totals=None):
@@ -246,7 +216,7 @@ def statistics(store, window=1000):
     table = '\n'.join(' '.join(cell.ljust(widths[i]) if i == 0 else cell.rjust(widths[i])
                               for i, cell in enumerate(row)).rstrip() for row in cells)
     text = f'Последние {window} партий · учтено {count}\n<pre>{html.escape(table)}</pre>'
-    text += '\nСтрока — победитель, столбец — проигравший. Диагональ — баланс.'
+    text += '\nСтрока — победитель, столбец — проигравший. Диагональ — баланс: победы минус поражения; поражения в партиях с балансом (например, 12:10 или 22:20) не вычитаются.'
     text += '\n\nElo · вся история\n' + '\n'.join(f'{name}: {rating:.0f}' for name, rating in zip(names, ratings))
     return text, None
 
