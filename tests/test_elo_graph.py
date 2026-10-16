@@ -240,28 +240,31 @@ def test_album_rejects_invalid_images(encoded):
         request_body({'media': [{'type': 'photo', 'photo_base64': encoded}]})
 
 
-def test_integral_full_history_statistics_and_undo(tmp_path):
+def test_average_full_history_statistics_and_undo(tmp_path):
     from ttar.bot import statistics
-    from ttar.elo_graph import elo_integrals
-    store = Store(tmp_path / 'integral.db')
+    from ttar.elo_graph import elo_averages
+    store = Store(tmp_path / 'average.db')
     store.db.execute("UPDATE settings SET value='true' WHERE key='configured'")
     for alias, name in ROSTER:
         store.add_player(alias, name, None, 9)
-    assert elo_integrals([], 4) == [0] * 4
+    assert elo_averages([], 4) == [0] * 4
+    assert elo_averages([(0, [0] * 4)], 4) == [0] * 4
+    assert elo_averages([(0, [0, 0]), (1, [10, -10]),
+                         (2, [15, -15]), (3, [18, -18])], 2) == pytest.approx([43 / 3, -43 / 3])
     first = photo(store, 'first', at=86400)
     approve(store, first, 1)
     second = photo(store, 'second', at=172800, data=raw('Р', 'В'))
     approve(store, second, 1)
-    assert elo_integrals(game_history(store, ROSTER), 4) == [24, -24, 8, -8]
+    assert elo_averages(game_history(store, ROSTER), 4) == [16, -16, 8, -8]
     text, _ = statistics(store, 1)
     assert 'учтено 1' in text
     assert 'Диагональ — баланс игрока:' in text
     assert 'старт 0' in text
-    for name, rating, area in zip([name for _, name in ROSTER], [16, -16, 16, -16], [24, -24, 8, -8]):
-        assert f'{name}: {rating} · интеграл Elo: {area:.1f}' in text
+    for name, rating, average in zip([name for _, name in ROSTER], [16, -16, 16, -16], [16, -16, 8, -8]):
+        assert f'{name}: {rating} · средний Elo: {average:.0f}' in text
     store.db.execute('UPDATE games SET active=0 WHERE photo_id=?', (first,))
     store.recalculate()
-    assert elo_integrals(game_history(store, ROSTER), 4) == [0, 0, 8, -8]
+    assert elo_averages(game_history(store, ROSTER), 4) == [0, 0, 16, -16]
 
 
 def test_zero_baseline_upgrade_is_idempotent(tmp_path):

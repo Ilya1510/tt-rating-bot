@@ -39,13 +39,13 @@ def game_history(store, roster):
             enumerate(_game_history(store, roster))]
 
 
-def elo_integrals(history, player_count):
-    """Signed area of the full, unsmoothed all-games graph, using trapezoids."""
-    areas = [0.] * player_count
-    for (x0, y0), (x1, y1) in zip(history, history[1:]):
-        for i in range(player_count):
-            areas[i] += (x1 - x0) * (y0[i] + y1[i]) / 2
-    return areas
+def elo_averages(history, player_count):
+    """Mean rating after every active game, excluding the initial zero point."""
+    points = history[1:]
+    if not points:
+        return [0.] * player_count
+    return [sum(values[i] for _, values in points) / len(points)
+            for i in range(player_count)]
 
 
 COLORS = ('#ff0000', '#008000', '#000000', '#0000ff')

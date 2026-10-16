@@ -217,14 +217,13 @@ def statistics(store, window=1000):
                               for i, cell in enumerate(row)).rstrip() for row in cells)
     text = f'Последние {window} партий · учтено {count}\n<pre>{html.escape(table)}</pre>'
     text += '\nСтрока — победитель, столбец — проигравший. Диагональ — баланс игрока: победы минус поражения; поражения в партиях с балансом (например, 12:10 или 22:20) не вычитаются.'
-    from .elo_graph import game_history, elo_integrals
-    integrals = elo_integrals(game_history(store, ROSTER), len(ROSTER))
+    from .elo_graph import game_history, elo_averages
+    averages = elo_averages(game_history(store, ROSTER), len(ROSTER))
     text += '\n\nElo · вся история · старт 0\n' + '\n'.join(
-        f'{name}: {rating:.0f} · интеграл Elo: {area:.1f}'
-        for name, rating, area in zip(names, ratings, integrals))
-    text += ('\nИнтеграл — площадь под графиком all games (трапеции, Elo × партии); '
-             'учтены все общие партии, включая партии других игроков. '
-             'Метрика отражает длительность преимущества, а не только текущую силу.')
+        f'{name}: {rating:.0f} · средний Elo: {average:.0f}'
+        for name, rating, average in zip(names, ratings, averages))
+    text += ('\nСредний Elo — среднее рейтингов после каждой общей партии за всю историю; '
+             'начальная нулевая точка не учитывается. Округлено до целого.')
     return text, None
 
 
