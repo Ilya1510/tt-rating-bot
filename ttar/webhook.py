@@ -157,9 +157,9 @@ def relay_action(event, telegram, chat_id):
     action, payload = event.get('telegram_action'), event.get('payload', {})
     if not isinstance(payload, dict):
         return {'ok': False, 'code': 'invalid_payload'}
-    if action not in ('sendPhoto', 'sendMessage', 'editMessageText', 'answerCallbackQuery', 'getChatMember', 'download'):
+    if action not in ('sendPhoto', 'sendMediaGroup', 'sendMessage', 'editMessageText', 'answerCallbackQuery', 'getChatMember', 'download'):
         return {'ok': False, 'code': 'forbidden_method'}
-    if action in ('sendPhoto', 'sendMessage', 'editMessageText', 'getChatMember') and payload.get('chat_id') != chat_id:
+    if action in ('sendPhoto', 'sendMediaGroup', 'sendMessage', 'editMessageText', 'getChatMember') and payload.get('chat_id') != chat_id:
         return {'ok': False, 'code': 'forbidden_chat'}
     try:
         if action == 'download':

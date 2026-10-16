@@ -61,7 +61,18 @@ def test_same_day_and_final_ratings(tmp_path):
     store.db.close()
 
 
-def test_command_png_outbox_dedup_and_group_filter(tmp_path):
+def test_command_png_outbox_dedup_and_group_filter(tmp_path, monkeypatch):
+    from PIL import ImageDraw
+    original = ImageDraw.ImageDraw.text
+    titles = []
+    legends = []
+    def record(draw, xy, text, *args, **kwargs):
+        if xy == (90, 20):
+            titles.append(text)
+        if xy[1] == 57:
+            legends.append(text)
+        return original(draw, xy, text, *args, **kwargs)
+    monkeypatch.setattr(ImageDraw.ImageDraw, 'text', record)
     store = Store(tmp_path / 'test.db')
     store.db.execute("UPDATE settings SET value='true' WHERE key='configured'")
     bot = Bot(store, object(), None, -123)
@@ -72,27 +83,27 @@ def test_command_png_outbox_dedup_and_group_filter(tmp_path):
     jobs = store.db.execute('SELECT * FROM jobs ORDER BY id').fetchall()
     for job in [jobs[0], jobs[0], jobs[1]]:
         bot.handle(job)
-    rows = store.db.execute("SELECT * FROM outbox WHERE method='sendPhoto'").fetchall()
-    assert len(rows) == 3
-    third = json.loads(rows[2]['payload'])
-    assert 'последнего подтверждённого фото' in third['caption']
-    assert 'Максим, Илья' in third['caption']
-    assert 'Рома' not in third['caption'] and 'Валя' not in third['caption']
-    assert Image.open(io.BytesIO(base64.b64decode(third['photo_base64']))).size == (1200, 720)
-    second = json.loads(rows[1]["payload"])
-    assert second["chat_id"] == -123
-    assert "после каждой партии" in second["caption"]
-    second_image = Image.open(io.BytesIO(base64.b64decode(second["photo_base64"])))
-    assert second_image.format == "PNG" and second_image.size == (1200, 720)
+    rows = store.db.execute("SELECT * FROM outbox WHERE method='sendMediaGroup'").fetchall()
+    assert len(rows) == 1
+    assert not store.db.execute("SELECT * FROM outbox WHERE method='sendPhoto'").fetchall()
     payload = json.loads(rows[0]['payload'])
-    png = base64.b64decode(payload['photo_base64'])
-    image = Image.open(io.BytesIO(png))
-    assert image.format == 'PNG' and image.size == (1200, 720)
     assert payload['chat_id'] == -123
+    assert len(payload['media']) == 3
+    # Rehandling renders again, but creates no second outbox delivery.
+    assert titles == ['Elo / by day', 'Elo / all games', 'Elo / last photo'] * 2
+    assert legends == (['Maxim', 'Ilya', 'Roma', 'Valya'] * 2 + ['Maxim', 'Ilya']) * 2
     body, content_type = request_body(payload)
     assert content_type.startswith('multipart/form-data; boundary=')
-    assert png in body and b'name="photo"; filename="elo.png"' in body
+    for index, item in enumerate(payload['media']):
+        assert item['type'] == 'photo' and 'caption' not in item
+        png = base64.b64decode(item['photo_base64'])
+        image = Image.open(io.BytesIO(png))
+        assert image.format == 'PNG' and image.size == (1200, 720)
+        assert png in body
+        assert f'"media": "attach://photo_{index}"'.encode() in body
+        assert f'name="photo_{index}"; filename="elo.png"'.encode() in body
     assert b'photo_base64' not in body
+    assert 'media' not in payload['media'][0]  # Encoding must not mutate the outbox payload.
     store.db.close()
 
 
@@ -200,3 +211,30 @@ def test_render_marks_only_peaks_and_session_only_selected_players(monkeypatch):
     marks.clear()
     render_graph(history, by_game=True, players=[0, 1], all_points=True)
     assert marks == [COLORS[0]] * 5 + [COLORS[1]] * 5
+
+
+def test_album_relay_and_transport(monkeypatch):
+    png = render_graph([(0, [1000] * 4), (1, [1016, 984, 1000, 1000])], by_game=True)
+    payload = {'chat_id': -123, 'media': [
+        {'type': 'photo', 'photo_base64': base64.b64encode(png).decode()} for _ in range(3)]}
+    calls = []
+    def read(client, path, payload):
+        body, content_type = request_body(payload)
+        calls.append((path, body, content_type))
+        return b'{"ok":true,"result":[{"message_id":1},{"message_id":2},{"message_id":3}]}'
+    monkeypatch.setattr(Telegram, '_read', read)
+    client = Telegram('test')
+    assert relay_action({'telegram_action': 'sendMediaGroup', 'payload': payload}, client, -999)['code'] == 'forbidden_chat'
+    assert not calls
+    result = relay_action({'telegram_action': 'sendMediaGroup', 'payload': payload}, client, -123)
+    assert result['ok'] and len(result['result']) == 3
+    assert calls[0][0] == '/bottest/sendMediaGroup'
+    assert calls[0][1].count(png) == 3
+    assert calls[0][2].startswith('multipart/form-data')
+
+
+@pytest.mark.parametrize('encoded', ['not base64!', base64.b64encode(b'not png').decode(),
+                                    base64.b64encode(b'\x89PNG\r\n\x1a\n' + b'x' * (2 * 1024 * 1024)).decode()])
+def test_album_rejects_invalid_images(encoded):
+    with pytest.raises(ValueError):
+        request_body({'media': [{'type': 'photo', 'photo_base64': encoded}]})

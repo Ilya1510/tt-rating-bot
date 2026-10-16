@@ -24,12 +24,28 @@ def redact(text):
 def request_body(payload):
     if payload is None:
         return None, 'application/json'
-    if 'photo_base64' not in payload:
-        return json.dumps(payload).encode(), 'application/json'
     payload = dict(payload)
-    photo = base64.b64decode(payload.pop('photo_base64'), validate=True)
-    if not photo.startswith(b'\x89PNG\r\n\x1a\n') or len(photo) > 2 * 1024 * 1024:
-        raise ValueError('Invalid graph image')
+    photos = []
+    if 'photo_base64' in payload:
+        photos.append(('photo', payload.pop('photo_base64')))
+    if isinstance(payload.get('media'), list):
+        media = []
+        for index, item in enumerate(payload['media']):
+            item = dict(item)
+            if 'photo_base64' in item:
+                name = f'photo_{index}'
+                photos.append((name, item.pop('photo_base64')))
+                item['media'] = 'attach://' + name
+            media.append(item)
+        payload['media'] = media
+    if not photos:
+        return json.dumps(payload).encode(), 'application/json'
+    decoded = []
+    for name, encoded in photos:
+        photo = base64.b64decode(encoded, validate=True)
+        if not photo.startswith(b'\x89PNG\r\n\x1a\n') or len(photo) > 2 * 1024 * 1024:
+            raise ValueError('Invalid graph image')
+        decoded.append((name, photo))
     boundary = uuid.uuid4().hex
     parts = []
     for key, value in payload.items():
@@ -37,7 +53,8 @@ def request_body(payload):
             raise ValueError('Invalid field')
         value = json.dumps(value) if isinstance(value, (dict, list)) else str(value)
         parts.append(f'--{boundary}\r\nContent-Disposition: form-data; name="{key}"\r\n\r\n{value}\r\n'.encode())
-    parts.append(f'--{boundary}\r\nContent-Disposition: form-data; name="photo"; filename="elo.png"\r\nContent-Type: image/png\r\n\r\n'.encode() + photo + b'\r\n')
+    for name, photo in decoded:
+        parts.append(f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"; filename="elo.png"\r\nContent-Type: image/png\r\n\r\n'.encode() + photo + b'\r\n')
     parts.append(f'--{boundary}--\r\n'.encode())
     return b''.join(parts), 'multipart/form-data; boundary=' + boundary
 

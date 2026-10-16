@@ -96,14 +96,14 @@ def session_history(store, roster, today=None):
     return result, players, is_today
 
 
-def render_graph(history, *, by_game=False, players=None, all_points=False):
+def render_graph(history, *, by_game=False, players=None, all_points=False, title=None):
     image = Image.new('RGB', (1200, 720), 'white')
     draw = ImageDraw.Draw(image)
     font = ImageFont.load_default(size=22)
     small = ImageFont.load_default(size=17)
     colors = COLORS
     players = list(range(4)) if players is None else players
-    title = 'Elo history / ratings after each game' if by_game else 'Elo history / daily ratings (Moscow)'
+    title = title or ('Elo / all games' if by_game else 'Elo / by day')
     draw.text((90, 20), title, fill='#222222', font=font)
     for slot, i in enumerate(players):
         name, color = ('Maxim', 'Ilya', 'Roma', 'Valya')[i], colors[i]

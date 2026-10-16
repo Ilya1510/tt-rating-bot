@@ -71,7 +71,7 @@ The roster is М — Максим (Maxim), И — Илья (Ilya), Р — Ром
 | --- | --- |
 | `/confirm` | Vote for the group's latest draft; the inline button is the usual option. |
 | `/stat N` | Statistics for the latest N confirmed active games; N defaults to 1,000. |
-| `/elo_graph` or `/graph` | All-time Elo charts by date and game number. |
+| `/elo_graph` or `/graph` | One album with Elo charts by day, all games, and today/latest photo. |
 | `/elo_chase` | Consecutive wins Ilya needs against Maxim to strictly overtake him in Elo, assuming no other games. Does not change ratings. |
 | `/work question or task` | Questions for all group members; code, configuration and permission changes for the authenticated owner only. |
 | `/create_booking YYYY-MM-DD HH:MM MINUTES` | Owner-only booking attempt; manual duration defaults to 60 minutes, maximum 90. With no arguments, use the next Monday or Thursday at 19:00. |
@@ -216,7 +216,9 @@ AI-процесс `/work`.
   скрывают кнопку подтверждения.
 - **Статистика и графики.** Матрица личных встреч 4×4 за последние N игр
   (по умолчанию 1000), отдельные баллы с учётом баланса и Elo за всю историю.
-  Два PNG-графика: рейтинг по датам Москвы и после каждой подтверждённой партии.
+  Один альбом из трёх PNG-графиков: рейтинг по дням, по всем подтверждённым партиям
+  и за сегодня (если сегодня партий нет — по последнему подтверждённому фото).
+  Короткие заголовки размещены на самих графиках; длинных подписей нет.
 - **Бронирование зала.** Расписание, приглашение участников, ручное создание
   и отмена, ссылка на встречу. Одно исходное сообщение, которое обновляется
   при существенном изменении статуса.
@@ -245,7 +247,7 @@ Yandex Cloud. Telegram подключён напрямую через long polli
 | --- | --- |
 | `/confirm` | Голос за последний черновик группы; обычно используется кнопка под списком. |
 | `/stat N` | Статистика последних N подтверждённых активных партий; по умолчанию 1000. |
-| `/elo_graph` или `/graph` | Графики Elo за всю историю по датам и номерам партий. |
+| `/elo_graph` или `/graph` | Альбом Elo: по дням, всем партиям и за сегодня/последнее фото. |
 | `/elo_chase` | Сколько побед подряд Илье нужно над Максимом для строгого обгона в Elo, если других игр нет. Рейтинг не меняется. |
 | `/work вопрос или задача` | Вопросы доступны всем участникам; изменения кода, настроек и прав — только владельцу с проверенным Telegram ID. |
 | `/create_booking YYYY-MM-DD HH:MM MINUTES` | Попытка брони, только для владельца. Ручная длительность — 60 минут по умолчанию, максимум 90. Без аргументов — ближайший понедельник или четверг в 19:00. |

@@ -398,26 +398,18 @@ class Bot:
             history = daily_history(self.store, ROSTER)
             if not history:
                 return 'Пока нет подтверждённых партий для графика Эло.', None
-            self.store.send(key + ':graph', 'sendPhoto', {
-                'chat_id': self.allowed_chat,
-                'photo_base64': base64.b64encode(render_graph(history)).decode(),
-                'caption': 'Эло по датам · Максим, Илья, Рома, Валя.\n'
-                           'Рейтинг на конец игрового дня (Москва); только подтверждённые партии.'})
-            self.store.send(key + ':graph-games', 'sendPhoto', {
-                'chat_id': self.allowed_chat,
-                'photo_base64': base64.b64encode(
-                    render_graph(game_history(self.store, ROSTER), by_game=True)).decode(),
-                'caption': 'Эло после каждой партии · Максим, Илья, Рома, Валя.\n'
-                           'По оси X — порядковый номер подтверждённой партии; 0 — начальный рейтинг.\n'
-                           'Длинная история сгруппирована по партиям; точки — локальные пики.'})
             recent, players, is_today = session_history(self.store, ROSTER)
-            self.store.send(key + ':graph-session', 'sendPhoto', {
+            images = [
+                render_graph(history),
+                render_graph(game_history(self.store, ROSTER), by_game=True),
+                render_graph(recent, by_game=True, players=players, all_points=True,
+                             title='Elo / today' if is_today else 'Elo / last photo'),
+            ]
+            self.store.send(key + ':graph', 'sendMediaGroup', {
                 'chat_id': self.allowed_chat,
-                'photo_base64': base64.b64encode(render_graph(
-                    recent, by_game=True, players=players, all_points=True)).decode(),
-                'caption': ('Эло за сегодня (Москва)' if is_today else 'Эло с последнего подтверждённого фото')
-                           + ' · ' + ', '.join(ROSTER[i][1] for i in players)
-                           + '.\nЛинии с точками после каждой партии; 0 — рейтинг до первой партии.'})
+                'media': [{'type': 'photo', 'photo_base64': base64.b64encode(image).decode()}
+                          for image in images],
+            })
             return None, None
         if command == '/elo_chase':
             return elo_chase(self.store)
