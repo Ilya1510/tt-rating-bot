@@ -260,3 +260,51 @@ def test_nonowner_never_enters_writable_stage_even_if_model_requests_change(tmp_
     if decision == 'changed':
         assert 'только Илья' in result['summary']
     assert not (release/'candidates'/'31').exists()
+
+
+@pytest.mark.parametrize('diagnostic', [
+    'ERROR Failed to refresh token status=401 error_code: refresh_token_reused',
+    'ERROR refresh_token_expired',
+    'ERROR refresh_token_revoked',
+    'Your access token could not be refreshed. Please log out and sign in again.',
+    '401 Unauthorized: Provided authentication token is expired.',
+    'Not logged in. Please run codex login.',
+])
+def test_codex_auth_failure_returns_actionable_chat_result(tmp_path, monkeypatch, diagnostic):
+    # Auth errors can occur before a prompt that exceeds retained diagnostics.
+    stderr = (diagnostic + '\n' + 'prompt content ' * 2000 + ' private-secret').encode()
+    monkeypatch.setattr(subprocess, 'run', lambda *a, **k:
+                        subprocess.CompletedProcess(a, 1, b'', stderr))
+    monkeypatch.setattr(os, 'geteuid', lambda: 1000)
+    monkeypatch.setattr(work, 'trusted_directory', lambda p: None)
+    def fail(*args):
+        work.command(['runuser', '-u', 'ttar-code', '--', '/opt/ttar/bin/codex', 'exec'], codex=True)
+    monkeypatch.setattr(work, '_run_work', fail)
+    result = work.run_work('Вопрос об Elo', 35, {'release_root': str(tmp_path)}, lambda _: None)
+    assert result['status'] == 'failed' and result['commit'] is None
+    assert result['summary'].startswith('Слетела авторизация Codex.')
+    assert 'повторно войти' in result['summary'] and 'отправить запрос ещё раз' in result['summary']
+    assert 'private-secret' not in json.dumps(result)
+    assert 'prompt content' not in json.dumps(result)
+
+
+@pytest.mark.parametrize('codex,diagnostic', [
+    (False, 'refresh_token_reused'),  # e.g. test output must not be reclassified
+    (True, 'runuser: cannot set groups: Operation not permitted'),
+    (True, '401 Unauthorized from an unrelated tool'),
+    (True, '429 usage limit reached'),
+    (True, 'connection timeout'),
+])
+def test_unrelated_command_failure_keeps_original_error(monkeypatch, codex, diagnostic):
+    monkeypatch.setattr(subprocess, 'run', lambda *a, **k:
+                        subprocess.CompletedProcess(a, 1, b'', diagnostic.encode()))
+    monkeypatch.setattr(os, 'geteuid', lambda: 1000)
+    with pytest.raises(work.CommandFailure) as error:
+        work.command(['runuser'], codex=codex)
+    assert error.value.executable == 'runuser' and error.value.returncode == 1
+
+
+def test_successful_codex_output_is_not_classified_as_failure(monkeypatch):
+    monkeypatch.setattr(subprocess, 'run', lambda *a, **k:
+                        subprocess.CompletedProcess(a, 0, b'answer', b'refresh_token_reused'))
+    assert work.command(['codex', 'exec'], codex=True) == b'answer'

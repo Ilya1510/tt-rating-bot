@@ -23,9 +23,8 @@ except KeyError:
 home=Path('/var/lib/ttar-code');home.mkdir(exist_ok=True);os.chown(home,0,0);home.chmod(0o755)
 (home/'jobs').mkdir(exist_ok=True);os.chown(home/'jobs',0,0);(home/'jobs').chmod(0o755)
 auth=home/'.codex';auth.mkdir(exist_ok=True);os.chown(auth,who.pw_uid,who.pw_gid);auth.chmod(0o700)
-if not (auth/'auth.json').exists():
- shutil.copyfile('/var/lib/ttar-ocr/.codex/auth.json',auth/'auth.json')
- os.chown(auth/'auth.json',who.pw_uid,who.pw_gid);(auth/'auth.json').chmod(0o600)
+# Each service must sign in independently. Copying a rotating OAuth refresh
+# token lets one service invalidate the other service's cached session.
 release=Path('/var/lib/ttar-release');release.mkdir(exist_ok=True);release.chmod(0o711)
 if not (release/'github_ed25519').exists(): raise RuntimeError('GitHub deploy key is not installed')
 shutil.copyfile('/root/.ssh/known_hosts',release/'known_hosts');(release/'known_hosts').chmod(0o644)
@@ -48,7 +47,7 @@ if not (release/'repo').exists():
 for parent,dirs,files in os.walk(release/'repo'):
  os.chmod(parent,0o755)
  for name in files:os.chmod(Path(parent)/name,0o644)
-print(json.dumps({'control_installed':True,'calendar_credential':bool(p['credentials']['calendar_token']),'git_checkout':True}))
+print(json.dumps({'control_installed':True,'calendar_credential':bool(p['credentials']['calendar_token']),'git_checkout':True,'work_login_required':not (auth/'auth.json').exists()}))
 '''
 
 

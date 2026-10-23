@@ -60,3 +60,20 @@ its own 90-minute policy; the bot must not silently shorten or split a booking.
 
 A full verification must exercise the actual system service. A root-shell run
 alone does not check systemd privilege restrictions or controller handoff.
+
+## Codex authentication recovery
+
+The work executor and OCR service must use independent ChatGPT logins. The
+installer never copies the OCR auth cache into the work executor's home. On a
+fresh installation, `work_login_required: true` means the owner must sign in
+before using `/work`; an existing auth file alone does not prove a valid session.
+
+```bash
+ssh -t ilya-grid-vm "sudo -u ttar-code env HOME=/var/lib/ttar-code CODEX_HOME=/var/lib/ttar-code/.codex sh -c 'cd /var/lib/ttar-code && exec /opt/ttar/bin/codex login --device-auth'"
+```
+
+Complete the device-code flow in the owner's browser. Do not copy the resulting
+credentials into another service's home. Expired, revoked or reused refresh-token
+errors in either Codex stage produce one chat-safe message asking the owner to
+sign in again and resubmit the request. Other process failures retain their own
+error classification. Failed operations are not replayed automatically.

@@ -142,7 +142,7 @@ def trusted_directory(path):
         raise WorkError('Каталог исполнителя должен принадлежать root без общей записи.')
 
 
-def command(argv, *, cwd=None, data=None, env=None, timeout=180):
+def command(argv, *, cwd=None, data=None, env=None, timeout=180, codex=False):
     try:
         run = subprocess.run(argv, cwd=cwd, input=data, env=env or clean_env(),
                              stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -169,6 +169,19 @@ def command(argv, *, cwd=None, data=None, env=None, timeout=180):
                     json.dump(detail, stream)
         except Exception:
             pass
+        # Only classify the Codex invocation, not git/tests or arbitrary runuser
+        # failures. Inspect stderr before truncation: the auth error can precede
+        # a long echoed prompt. Never send provider diagnostics to the chat.
+        if codex:
+            diagnostic = run.stderr.decode(errors='replace').lower()
+            if any(marker in diagnostic for marker in (
+                    'refresh_token_reused', 'refresh_token_expired', 'refresh_token_revoked',
+                    'your access token could not be refreshed',
+                    'provided authentication token is expired',
+                    'not logged in. please run',
+            )):
+                raise WorkError('Слетела авторизация Codex. Илье нужно повторно войти '
+                                'в ChatGPT на сервере для /work, затем отправить запрос ещё раз.') from None
         raise CommandFailure(Path(argv[0]).name, run.returncode,
                              redact(run.stdout.decode(errors='replace')[-20000:], limit=20000),
                              redact(run.stderr.decode(errors='replace')[-4000:], limit=4000))
@@ -336,7 +349,7 @@ def _run_work(request, job_id, config, progress, outcome):
     progress('Разбираю вопрос по актуальному снимку данных.')
     command(answer_argv, data=(ANSWER_PROMPT + '\nJSON-снимок: ' + str(context_path) +
                                '\nЗапрос владельца:\n' + request).encode(), env=code_env,
-            timeout=int(config.get('code_timeout', 1800)))
+            timeout=int(config.get('code_timeout', 1800)), codex=True)
     answer = read_report(report)
     if answer['status'] != 'changed':
         outcome.update(answer)
@@ -350,7 +363,7 @@ def _run_work(request, job_id, config, progress, outcome):
         progress('Исполнитель вносит изменения в отдельной копии.')
         report.write_text('')
         command(argv, data=(PROMPT + request + feedback).encode(), env=code_env,
-                timeout=int(config.get('code_timeout', 1800)))
+                timeout=int(config.get('code_timeout', 1800)), codex=True)
         result = read_report(report)
         if result['status'] != 'changed':
             if attempt > 1:
