@@ -141,6 +141,10 @@ replayed updates and recognized duplicate photos do not count games twice.
 SQLite uses FULL/WAL, services restart under systemd, and daily database backups
 retain 30 copies. The bridge has its own database, service and backup timer.
 
+An optional [Google Sheets history backup](docs/google-backup.md) copies confirmed
+games, scores and Elo changes off the host. It updates after the second vote,
+retries failed writes and retains cancelled games with a status marker.
+
 OCR runs as a separate user through a Unix socket without access to the database
 or service credentials. Photo content is treated as data, not instructions.
 Secrets stay outside Git; the tennis service uses encrypted systemd credentials.
@@ -314,6 +318,10 @@ HTTP 201 или название зала сами по себе не доказ
 повторные updates и распознанные дубли фотографий не добавляют игры заново.
 SQLite работает в FULL/WAL, сервисы перезапускает systemd, ежедневные резервные
 копии БД хранятся в количестве 30 штук. У моста отдельные БД, сервис и таймер копий.
+
+[Копия истории в Google Sheets](docs/google-backup.md) сохраняет подтверждённые
+игры, счёт и изменения Elo вне VM. Обновляется после второго голоса, повторяет
+неудачные записи и сохраняет отменённые партии с соответствующей отметкой.
 
 OCR работает от отдельного пользователя через Unix socket, без доступа к БД
 и сервисным ключам. Текст фото рассматривается как данные, а не инструкции.

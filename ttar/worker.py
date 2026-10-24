@@ -190,6 +190,12 @@ def main():
     thread.start()
     photos = threading.Thread(target=process_photos, args=(config, credentials))
     photos.start()
+    backup = None
+    if config.get('google_backup'):
+        from .sheets_backup import run as backup_loop
+        backup = threading.Thread(target=backup_loop,
+            args=(config, credential_dir/'google-backup.json', STOP), daemon=True)
+        backup.start()
     LOG.info('Worker started, rating unit=%s; confirmations required', store.setting('unit'))
     while not STOP.is_set():
         if not thread.is_alive():
@@ -203,6 +209,8 @@ def main():
             STOP.wait(.2)
     photos.join()  # Let an in-flight OCR finish before releasing the worker lock.
     thread.join(timeout=35)
+    if backup:
+        backup.join(timeout=35)
     store.db.close()
     lock.close()
 
