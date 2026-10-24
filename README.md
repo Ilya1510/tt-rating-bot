@@ -72,6 +72,7 @@ The roster is М — Максим (Maxim), И — Илья (Ilya), Р — Ром
 | `/confirm` | Vote for the group's latest draft; the inline button is the usual option. |
 | `/stat N` | Statistics for the latest N confirmed active games; N defaults to 1,000. |
 | `/elo_graph` or `/graph` | One album with Elo charts by day, all games, and today/latest photo. |
+| `/spreadsheet` | Link to the Google Sheets history backup. `/spredsheet` is also accepted. |
 | `/elo_chase` | Consecutive wins Ilya needs against Maxim to strictly overtake him in Elo, assuming no other games. Does not change ratings. |
 | `/work question or task` | Questions for all group members; code, configuration and permission changes for the authenticated owner only. |
 | `/create_booking YYYY-MM-DD HH:MM MINUTES` | Owner-only booking attempt; manual duration defaults to 60 minutes, maximum 90. With no arguments, use the next Monday or Thursday at 19:00. |
@@ -252,6 +253,7 @@ Yandex Cloud. Telegram подключён напрямую через long polli
 | `/confirm` | Голос за последний черновик группы; обычно используется кнопка под списком. |
 | `/stat N` | Статистика последних N подтверждённых активных партий; по умолчанию 1000. |
 | `/elo_graph` или `/graph` | Альбом Elo: по дням, всем партиям и за сегодня/последнее фото. |
+| `/spreadsheet` | Ссылка на историю партий в Google Sheets. Вариант `/spredsheet` тоже работает. |
 | `/elo_chase` | Сколько побед подряд Илье нужно над Максимом для строгого обгона в Elo, если других игр нет. Рейтинг не меняется. |
 | `/work вопрос или задача` | Вопросы доступны всем участникам; изменения кода, настроек и прав — только владельцу с проверенным Telegram ID. |
 | `/create_booking YYYY-MM-DD HH:MM MINUTES` | Попытка брони, только для владельца. Ручная длительность — 60 минут по умолчанию, максимум 90. Без аргументов — ближайший понедельник или четверг в 19:00. |

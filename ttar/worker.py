@@ -1,4 +1,5 @@
 import fcntl
+import hashlib
 import json
 import logging
 import os
@@ -10,7 +11,7 @@ from pathlib import Path
 import boto3
 from botocore.config import Config
 
-from .bot import Bot, card_update
+from .bot import Bot, MENU_COMMANDS, card_update
 from .core import Store
 from .recognizer import remote_recognize
 from .telegram import TelegramError
@@ -20,6 +21,13 @@ from .webhook import chat_of
 
 LOG = logging.getLogger('ttar')
 STOP = threading.Event()
+
+
+def queue_command_menu(store):
+    payload = {'commands': MENU_COMMANDS, 'scope': {'type': 'default'}, 'language_code': ''}
+    revision = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:16]
+    with store.transaction():
+        store.send('command-menu:' + revision, 'setMyCommands', payload)
 
 
 def telegram_client(config, credentials):
@@ -146,7 +154,8 @@ def process_photos(config, credentials):
     # the outbox, so concurrent OCR cannot duplicate or hold up card updates.
     store = Store(config['database'])
     telegram = telegram_client(config, credentials)
-    bot = Bot(store, telegram, lambda data: remote_recognize(data, config['recognizer_socket']), config['allowed_chat_id'])
+    bot = Bot(store, telegram, lambda data: remote_recognize(data, config['recognizer_socket']), config['allowed_chat_id'],
+              spreadsheet_id=config.get('google_backup', {}).get('spreadsheet_id'))
     try:
         while not STOP.is_set():
             job = store.claim(photos=True)
@@ -184,7 +193,9 @@ def main():
             raise RuntimeError('Wrong Telegram bot')
         if telegram.call('getWebhookInfo').get('url'):
             raise RuntimeError('Disable the webhook before direct polling')
-    bot = Bot(store, telegram, lambda data: remote_recognize(data, config['recognizer_socket']), config['allowed_chat_id'])
+    queue_command_menu(store)
+    bot = Bot(store, telegram, lambda data: remote_recognize(data, config['recognizer_socket']), config['allowed_chat_id'],
+              spreadsheet_id=config.get('google_backup', {}).get('spreadsheet_id'))
     receiver = receive_direct if config.get('telegram_transport') == 'direct' else receive
     thread = threading.Thread(target=receiver, args=(config, credentials), daemon=True)
     thread.start()

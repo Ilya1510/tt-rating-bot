@@ -10,9 +10,21 @@ from .recognizer import PARSER_VERSION
 from .operations import COMMANDS as OWNER_COMMANDS, enqueue as enqueue_operation
 
 ROSTER = [('М', 'Максим'), ('И', 'Илья'), ('Р', 'Рома'), ('В', 'Валя')]
+MENU_COMMANDS = [
+    {'command': command, 'description': description} for command, description in [
+        ('confirm', 'Подтвердить последний список партий'),
+        ('stat', 'Последние N партий, по умолчанию 1000'),
+        ('graph', 'Графики Elo по датам, партиям и последнему фото'),
+        ('spreadsheet', 'Таблица со всей историей партий'),
+        ('work', 'Вопрос о теннисе; доработки — только Илья'),
+        ('create_booking', 'Для Ильи: забронировать зал'),
+        ('cancel_booking', 'Для Ильи: отменить нашу бронь'),
+    ]
+]
 HELP = ('Пришли фото, проверь список и нажми «Подтвердить». Нужны 2 разных участника.\n'
         '/stat N — последние N партий. По умолчанию N = 1000.\n'
-        '/elo_graph — Эло по датам, партиям и за сегодня/последнее фото.\n'
+        '/graph — Эло по датам, партиям и за сегодня/последнее фото.\n'
+        '/spreadsheet — таблица со всей историей партий.\n'
         '/elo_chase — сколько побед подряд нужно Илье над Максом для обгона в Elo.\n'
         '/work вопрос — для всех; доработки бота — только для Ильи.\n'
         'Для Ильи:\n'
@@ -264,8 +276,9 @@ def split_message(text, limit=3900):
 
 
 class Bot:
-    def __init__(self, store, telegram, recognize, allowed_chat):
+    def __init__(self, store, telegram, recognize, allowed_chat, *, spreadsheet_id=None):
         self.store, self.telegram, self.recognize, self.allowed_chat = store, telegram, recognize, allowed_chat
+        self.spreadsheet_id = spreadsheet_id
 
     def handle(self, job):
         update = json.loads(job['payload'])
@@ -364,6 +377,10 @@ class Bot:
         if command in OWNER_COMMANDS:
             return enqueue_operation(self.store, command, text, actor, self.allowed_chat, key)
         args = text.split(maxsplit=1)[1] if len(text.split(maxsplit=1)) > 1 else ''
+        if command in ('/spreadsheet', '/spredsheet'):
+            if not self.spreadsheet_id:
+                return 'Таблица истории пока не подключена.', None
+            return 'Все партии, счёт и изменения Elo:\nhttps://docs.google.com/spreadsheets/d/' + self.spreadsheet_id + '/edit', None
         if command == '/stat':
             return statistics(self.store, parse_window(args, int(self.store.setting('stats_window'))))
         if command in ('/elo_graph', '/graph'):
