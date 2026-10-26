@@ -13,7 +13,7 @@ from botocore.config import Config
 
 from .bot import Bot, MENU_COMMANDS, card_update
 from .core import Store
-from .recognizer import remote_recognize
+from .recognizer import remote_recognize, RecognitionError, ERROR_MESSAGES
 from .telegram import TelegramError
 from .cloud_telegram import CloudTelegram
 from .cloud_poller import PollTelegram, run as poll_updates
@@ -140,13 +140,18 @@ def process_job(store, bot, job, chat_id):
         bot.handle(job)
         LOG.info('Job %s complete', job['id'])
     except Exception as error:
-        store.retry(job['id'], type(error).__name__)
-        LOG.warning('Job %s failed attempt %s: %s', job['id'], job['attempts'], type(error).__name__)
-        if job['attempts'] >= 3:
+        reason = str(error) if isinstance(error, RecognitionError) else type(error).__name__
+        auth_failed = isinstance(error, RecognitionError) and error.code == 'auth'
+        store.retry(job['id'], reason)
+        LOG.warning('Job %s failed attempt %s: %s', job['id'], job['attempts'], reason)
+        if job['attempts'] >= 3 or auth_failed:
             with store.transaction():
+                if auth_failed:
+                    store.db.execute("UPDATE jobs SET status='failed' WHERE id=?", (job['id'],))
                 store.send(f"failure:{job['id']}", 'sendMessage', {
                     'chat_id': chat_id,
-                    'text': f"Не удалось обработать update #{job['id']} после 3 попыток. Рейтинг не изменён. Администратор может проверить журнал и повторить задание."})
+                    'text': ERROR_MESSAGES[error.code] if isinstance(error, RecognitionError) else
+                        f"Не удалось обработать update #{job['id']} после 3 попыток. Рейтинг не изменён. Администратор может проверить журнал и повторить задание."})
 
 
 def process_photos(config, credentials):

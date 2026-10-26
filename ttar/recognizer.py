@@ -1,6 +1,7 @@
 """Dedicated Unix-socket service. No Telegram, cloud or rating DB credentials."""
 import argparse
 import json
+import logging
 import os
 import socket
 import struct
@@ -9,6 +10,31 @@ import tempfile
 from pathlib import Path
 
 from jsonschema import validate
+
+
+ERROR_MESSAGES = {
+    'auth': 'Слетела авторизация Codex для распознавания фото. Илье нужно повторно войти в ChatGPT на сервере для распознавания фото. Повторная отправка фото до входа не поможет. Рейтинг не изменён.',
+    'timeout': 'Распознавание фото не успело завершиться. Рейтинг не изменён; можно повторить позже.',
+    'limit': 'Распознавание фото временно недоступно: достигнут лимит Codex. Рейтинг не изменён; повтори позже.',
+    'provider': 'Сбой сервиса распознавания фото. Рейтинг не изменён; можно повторить позже.',
+}
+
+
+class RecognitionError(RuntimeError):
+    def __init__(self, code):
+        self.code = code if code in ERROR_MESSAGES else 'provider'
+        super().__init__('Recognition error: ' + self.code)
+
+
+def provider_error(output):
+    lower = output.lower()
+    if any(term in lower for term in (b'401', b'not logged in', b'authentication required',
+            b'refresh_token_reused', b'refresh_token_expired', b'refresh_token_revoked',
+            b'your access token could not be refreshed', b'authentication token is expired')):
+        return RecognitionError('auth')
+    if any(term in lower for term in (b'rate limit', b'usage limit', b'usage_limit', b'rate_limit')):
+        return RecognitionError('limit')
+    return RecognitionError('provider')
 
 
 def obj(properties):
@@ -97,22 +123,16 @@ def recognize(image, codex='/opt/ttar/bin/codex', model=None, timeout=180):
             run = subprocess.run(command, input=PROMPT.encode(), stdout=subprocess.PIPE,
                                  stderr=subprocess.PIPE, env=env, timeout=timeout)
         except subprocess.TimeoutExpired:
-            raise RuntimeError('Codex recognition timeout') from None
+            raise RecognitionError('timeout') from None
         if run.returncode != 0 or not result.exists():
             # Deliberately do not expose provider stderr: it may contain credentials.
-            lower = run.stderr.lower()
-            for term, reason in [(b'not logged in', 'authentication required'),
-                                 (b'401', 'authentication failed'),
-                                 (b'rate limit', 'rate limit'), (b'usage limit', 'usage limit')]:
-                if term in lower:
-                    raise RuntimeError('Codex recognition failed: ' + reason)
-            raise RuntimeError(f'Codex recognition failed (exit {run.returncode})')
+            raise provider_error(run.stderr + run.stdout)
         # Fail closed if a future CLI configuration enables an unexpected tool.
         for line in run.stdout.splitlines():
             event = json.loads(line)
             item = event.get('item', {})
             if item.get('type') == 'error':
-                raise RuntimeError('Codex reported a recognition error')
+                raise provider_error(json.dumps(item).encode())
             if item and item.get('type') not in ('agent_message', 'reasoning', 'plan_update'):
                 raise RuntimeError('Recognition attempted an unexpected tool')
         if result.stat().st_size > 256000:
@@ -144,7 +164,7 @@ def remote_recognize(image, path='/run/ttar-ocr/ocr.sock'):
             raise RuntimeError('Invalid recognition response')
         response = json.loads(read_exact(connection, size))
         if 'error' in response:
-            raise RuntimeError(response['error'])
+            raise RecognitionError(response.get('error_code'))
         validate(response['result'], SCHEMA)
         return response['result']
 
@@ -166,7 +186,9 @@ def serve(path, model):
                         raise ValueError('Invalid image size')
                     response = {'result': recognize(read_exact(connection, size), model=model)}
                 except Exception as error:
-                    response = {'error': 'Recognition failed: ' + type(error).__name__}
+                    code = error.code if isinstance(error, RecognitionError) else 'provider'
+                    logging.warning('Recognition failed: code=%s type=%s', code, type(error).__name__)
+                    response = {'error': 'Recognition failed', 'error_code': code}
                 data = json.dumps(response, ensure_ascii=False).encode()
                 try:
                     connection.sendall(struct.pack('!I', len(data)) + data)
