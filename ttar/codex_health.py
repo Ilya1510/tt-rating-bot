@@ -27,7 +27,7 @@ def probe_work(config):
         except BlockingIOError:
             raise Busy() from None
         home = work.get('code_home', '/var/lib/ttar-code')
-        argv = ['runuser', '-u', work.get('code_user', 'ttar-code'), '--',
+        argv = ['/usr/sbin/runuser', '-u', work.get('code_user', 'ttar-code'), '--',
                 '/usr/bin/env', '-i', 'PATH=/usr/local/bin:/usr/bin:/bin',
                 'HOME=' + home, 'CODEX_HOME=' + home + '/.codex',
                 'PYTHONPATH=/opt/ttar-control', '/opt/ttar/.venv/bin/python',

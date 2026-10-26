@@ -4,10 +4,22 @@ from pathlib import Path
 from unittest.mock import Mock
 
 from test_core import store
-from ttar.codex_health import check_due, Busy, INTERVAL
+from ttar.codex_health import check_due, probe_work, Busy, INTERVAL
 from ttar.recognizer import RecognitionError, health_probe
 
 CONFIG = {'allowed_chat_id': -123}
+
+
+def test_work_probe_locates_runuser_under_restricted_service_path(tmp_path, monkeypatch):
+    def run(argv, **kwargs):
+        assert argv[0] == '/usr/sbin/runuser'
+        assert 'HOME=/var/lib/ttar-code' in argv
+        assert 'CODEX_HOME=/var/lib/ttar-code/.codex' in argv
+        assert 'PYTHONPATH=/opt/ttar-control' in argv
+        assert kwargs['env'] == {'PATH': '/usr/bin:/bin'}
+        return subprocess.CompletedProcess(argv, 0, b'ok\n', b'')
+    monkeypatch.setattr(subprocess, 'run', run)
+    probe_work({'work': {'release_root': str(tmp_path)}})
 
 
 def notices(store):
