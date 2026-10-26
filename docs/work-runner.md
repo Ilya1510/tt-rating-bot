@@ -77,3 +77,21 @@ credentials into another service's home. Expired, revoked or reused refresh-toke
 errors in either Codex stage produce one chat-safe message asking the owner to
 sign in again and resubmit the request. Other process failures retain their own
 error classification. Failed operations are not replayed automatically.
+
+## Periodic connection checks
+
+Every six hours the maintenance service sends a tiny real model request through
+each independent login: OCR and `/work`. Successful checks stay silent. An auth
+failure produces one Telegram alert naming the affected service. Other failures
+are checked again after one minute before an alert; the same failure does not
+produce repeated notices until recovery (or a different failure reason).
+
+The schedule, last success and incident state persist in SQLite `codex_health`.
+Checks run on the idle work thread, separately from booking scheduling. OCR
+checks use the existing socket and serialize with photo recognition. Work checks
+run as `ttar-code`, with tools disabled, under the release lock, and skip while
+another release holds it. No credentials are copied between accounts. Set
+`codex_health_enabled=false` in the maintenance config to disable the checks.
+These requests exercise actual authentication and inference; they do not promise
+that the provider will never revoke a session. Inspect the `ttar-maintenance`
+journal for `Codex health target=... status=...`.

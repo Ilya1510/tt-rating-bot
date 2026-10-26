@@ -97,12 +97,13 @@ preliminary_summary — краткое описание видимого, без
 '''
 
 
-def recognize(image, codex='/opt/ttar/bin/codex', model=None, timeout=180):
+def codex_response(prompt, output_schema, image=None, codex='/opt/ttar/bin/codex', model=None, timeout=180):
     with tempfile.TemporaryDirectory(prefix='ttar-ocr-') as directory:
         root = Path(directory)
         photo, schema, result = root/'image.png', root/'schema.json', root/'result.json'
-        photo.write_bytes(image)
-        schema.write_text(json.dumps(SCHEMA))
+        if image is not None:
+            photo.write_bytes(image)
+        schema.write_text(json.dumps(output_schema))
         command = [codex, 'exec', '--ignore-user-config', '--ignore-rules', '--ephemeral',
                    '--skip-git-repo-check', '--sandbox', 'read-only', '-C', directory,
                    '-c', 'approval_policy="never"', '-c', 'web_search="disabled"',
@@ -113,14 +114,16 @@ def recognize(image, codex='/opt/ttar/bin/codex', model=None, timeout=180):
                    '-c', 'features.plugins=false', '-c', 'features.goals=false',
                    '-c', 'features.code_mode=false',
                    '-c', 'model_reasoning_effort="low"',
-                   '--json', '--image', str(photo), '--output-schema', str(schema), '-o', str(result), '-']
+                   '--json', '--output-schema', str(schema), '-o', str(result), '-']
+        if image is not None:
+            command[2:2] = ['--image', str(photo)]
         if model:
             command[2:2] = ['--model', model]
         # No inherited Telegram/cloud credentials or arbitrary user environment.
         env = {k: os.environ[k] for k in ('HOME', 'CODEX_HOME', 'CODEX_CA_CERTIFICATE', 'SSL_CERT_FILE') if k in os.environ}
         env['PATH'] = '/usr/local/bin:/usr/bin:/bin'
         try:
-            run = subprocess.run(command, input=PROMPT.encode(), stdout=subprocess.PIPE,
+            run = subprocess.run(command, input=prompt.encode(), stdout=subprocess.PIPE,
                                  stderr=subprocess.PIPE, env=env, timeout=timeout)
         except subprocess.TimeoutExpired:
             raise RecognitionError('timeout') from None
@@ -138,10 +141,22 @@ def recognize(image, codex='/opt/ttar/bin/codex', model=None, timeout=180):
         if result.stat().st_size > 256000:
             raise RuntimeError('Codex output too large')
         data = json.loads(result.read_text())
-        validate(data, SCHEMA)
-        if len(data['blocks']) > 30 or sum(len(b['rows']) for b in data['blocks']) > 300:
-            raise RuntimeError('Too many recognized rows')
+        validate(data, output_schema)
         return data
+
+
+def recognize(image, codex='/opt/ttar/bin/codex', model=None, timeout=180):
+    data = codex_response(PROMPT, SCHEMA, image, codex, model, timeout)
+    if len(data['blocks']) > 30 or sum(len(b['rows']) for b in data['blocks']) > 300:
+        raise RuntimeError('Too many recognized rows')
+    return data
+
+
+def health_probe(codex='/opt/ttar/bin/codex', model=None):
+    # A real model response, not merely the presence of an auth.json file.
+    codex_response('Привет! Это проверка подключения. Верни только {"ok":true}.',
+                   obj({'ok': {'type': 'boolean', 'const': True}}), codex=codex,
+                   model=model, timeout=60)
 
 
 def read_exact(connection, size):
@@ -169,6 +184,22 @@ def remote_recognize(image, path='/run/ttar-ocr/ocr.sock'):
         return response['result']
 
 
+def remote_health(path='/run/ttar-ocr/ocr.sock'):
+    # Zero-length frame is a fixed health request, handled serially with OCR.
+    with socket.socket(socket.AF_UNIX) as connection:
+        connection.settimeout(260)
+        connection.connect(path)
+        connection.sendall(struct.pack('!I', 0))
+        size = struct.unpack('!I', read_exact(connection, 4))[0]
+        if not 0 < size <= 1000:
+            raise RecognitionError('provider')
+        response = json.loads(read_exact(connection, size))
+        if 'error' in response:
+            raise RecognitionError(response.get('error_code'))
+        if response != {'healthy': True}:
+            raise RecognitionError('provider')
+
+
 def serve(path, model):
     # systemd RuntimeDirectory provides a private, group-shared socket directory.
     Path(path).unlink(missing_ok=True)
@@ -182,9 +213,13 @@ def serve(path, model):
                 connection.settimeout(220)
                 try:
                     size = struct.unpack('!I', read_exact(connection, 4))[0]
-                    if not 0 < size <= 20 * 1024 * 1024:
+                    if not 0 <= size <= 20 * 1024 * 1024:
                         raise ValueError('Invalid image size')
-                    response = {'result': recognize(read_exact(connection, size), model=model)}
+                    if size == 0:
+                        health_probe(model=model)
+                        response = {'healthy': True}
+                    else:
+                        response = {'result': recognize(read_exact(connection, size), model=model)}
                 except Exception as error:
                     code = error.code if isinstance(error, RecognitionError) else 'provider'
                     logging.warning('Recognition failed: code=%s type=%s', code, type(error).__name__)

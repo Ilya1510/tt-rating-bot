@@ -200,6 +200,12 @@ def work_loop(config):
         while not STOP.is_set():
             op = claim(store, work=True)
             if not op:
+                if config.get('codex_health_enabled', True):
+                    try:
+                        from .codex_health import check_due
+                        check_due(store, config)
+                    except Exception as error:
+                        LOG.warning('Codex health tick failed: %s', type(error).__name__)
                 STOP.wait(1)
                 continue
             if op['actor'] <= 0 or op['chat_id'] != config['allowed_chat_id']:
