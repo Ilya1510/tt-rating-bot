@@ -220,6 +220,21 @@ def test_uncertain_creation_without_id_is_not_reported_as_created(store):
     assert 'Ответ потерян' in text
 
 
+def test_booking_conflict_and_ambiguous_server_error_have_readable_messages():
+    from ttar.maintenance import booking_text
+    row = {'start': '2026-11-09T19:00:00+03:00',
+           'end': '2026-11-09T21:30:00+03:00', 'pending_action': 'book'}
+    assert booking_text(row, BookingResult('conflict', reason='Зал уже занят в это время.')) == (
+        'Зал уже занят на 09.11.2026 19:00–21:30 МСК. Забронировать не получилось.')
+    error = BookingResult('uncertain', reason='Календарь: ошибка HTTP 500.')
+    assert booking_text(row, error) == (
+        'Не удалось подтвердить бронь на 09.11.2026 19:00–21:30 МСК.\n'
+        'Возможно, зал уже занят. Проверь его расписание в календаре.')
+    assert error.status == 'uncertain'
+    row['pending_action'] = 'cancel'
+    assert 'Возможно, зал уже занят' not in booking_text(row, error)
+
+
 def test_pending_cancellation_updates_its_own_single_message(store):
     client, tg = MissingResourceClient(), BookingTelegram()
     run_booking(store, client, operation(store))

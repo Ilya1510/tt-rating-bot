@@ -71,6 +71,15 @@ def booking_text(row, result):
     status = result.status
     quiet_resource_status = result.event_id and status in ('accepted', 'pending', 'unverifiable')
     cancelling = row['pending_action'] == 'cancel'
+    if status == 'conflict' and not cancelling:
+        return f'Зал уже занят на {slot}. Забронировать не получилось.'
+    if (status == 'uncertain' and not result.event_id and not cancelling
+            and result.reason == 'Календарь: ошибка HTTP 500.'):
+        # This API also returns 500 when a room is occupied, while free-busy
+        # can be empty. Do not turn an ambiguous write into a definite conflict:
+        # keep its durable status and the protection against duplicate creation.
+        return (f'Не удалось подтвердить бронь на {slot}.\n'
+                'Возможно, зал уже занят. Проверь его расписание в календаре.')
     if quiet_resource_status and not cancelling:
         text = f'Встреча создана: {slot}.'
     elif status == 'cancelled':
