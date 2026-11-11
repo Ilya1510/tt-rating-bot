@@ -48,3 +48,28 @@ bridge mapping before rollback; never restore an old tennis database over new vo
 
 Read-only identity, member checks and photo downloads do not validate delivery.
 Migration acceptance also requires real send/receive checks and a restart check.
+
+## Codex execution user on this host
+
+Since 2026-11-11, both Codex clients run as `ilya-grid`, authorized by the owner.
+DNS queries for `auth.openai.com` and `chatgpt.com` returned `::1` for the former
+service users (`ttar-code`, `ttar-ocr`), but working addresses for `ilya-grid`.
+
+- `/etc/ttar/maintenance.json`: `work.code_user` is `ilya-grid`.
+- `/etc/systemd/system/ttar-ocr.service.d/20-codex-user.conf` sets
+  `User=ilya-grid`, keeping `Group=ttar-ocr` for worker socket access.
+- OCR retains `HOME=/var/lib/ttar-ocr`; work retains
+  `HOME=/var/lib/ttar-code`. Their separate `.codex` directories and sessions
+  are owned by `ilya-grid`; no auth cache is copied between services.
+- `/var/lib/ttar-code` and its `jobs` parent remain root-owned, as required by
+  the release controller. New job directories use the configured executor UID.
+- Existing OCR systemd restrictions and work/test sandbox settings remain in
+  effect. The executor now shares a Unix identity with the owner, rather than
+  having a dedicated service UID. Telegram and the privileged controller keep
+  their existing service identities.
+
+Ordinary releases preserve the systemd drop-in and maintenance configuration.
+The generic installer still defaults to dedicated users; after reinstalling on
+this host, restore the above override and auth-directory ownership before use.
+The pre-change config and ownership metadata are saved privately in
+`/var/backups/ttar/codex-user-20261111` (do not print or commit the config).

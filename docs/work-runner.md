@@ -15,7 +15,8 @@ The owner may change all project code, including access policy, work_runner,
 maintenance, release, instructions, tests, dependencies and deployment files.
 The prior policy describes current behavior and does not overrule a new explicit
 owner instruction. Secrets, Git internals, runtime state and symlinks are not
-published. Code and tests still run as the isolated ttar-code user, not as root.
+published. Code and tests run as the configured `work.code_user`, not as root.
+On the current host this is `ilya-grid`; see `direct-host.md` for the host override.
 Linux requires bubblewrap and working user namespaces; isolation must not be
 silently disabled. The maintenance system unit omits User=root because that
 setting loses CAP_SETUID on this host with NoNewPrivileges.
@@ -29,7 +30,7 @@ and restores prior modules, units and policy on failure without restoring the
 SQLite database. The guard never interrupts the old controller while it is
 still finishing a task.
 
-The service retains separate ttar-code and root release identities. Root owns
+The service retains separate executor and root release identities. Root owns
 /var/lib/ttar-release, the repository-limited deploy key and cloud release key.
 The code workspace never receives those keys. The test unit has no network,
 production database, credentials or Codex authentication.
@@ -69,7 +70,7 @@ fresh installation, `work_login_required: true` means the owner must sign in
 before using `/work`; an existing auth file alone does not prove a valid session.
 
 ```bash
-ssh -t ilya-grid-vm "sudo -u ttar-code env HOME=/var/lib/ttar-code CODEX_HOME=/var/lib/ttar-code/.codex sh -c 'cd /var/lib/ttar-code && exec /opt/ttar/bin/codex login --device-auth'"
+ssh -t ilya-grid-vm "sudo -u ilya-grid env HOME=/var/lib/ttar-code CODEX_HOME=/var/lib/ttar-code/.codex sh -c 'cd /var/lib/ttar-code && exec /opt/ttar/bin/codex login --device-auth'"
 ```
 
 Complete the device-code flow in the owner's browser. Do not copy the resulting
@@ -89,7 +90,7 @@ produce repeated notices until recovery (or a different failure reason).
 The schedule, last success and incident state persist in SQLite `codex_health`.
 Checks run on the idle work thread, separately from booking scheduling. OCR
 checks use the existing socket and serialize with photo recognition. Work checks
-run as `ttar-code`, with tools disabled, under the release lock, and skip while
+run as `work.code_user`, with tools disabled, under the release lock, and skip while
 another release holds it. No credentials are copied between accounts. Set
 `codex_health_enabled=false` in the maintenance config to disable the checks.
 These requests exercise actual authentication and inference; they do not promise
