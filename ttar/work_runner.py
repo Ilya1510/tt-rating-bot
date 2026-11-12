@@ -17,12 +17,17 @@ import subprocess
 import tarfile
 from pathlib import Path, PurePosixPath
 from .operations import OWNER_ID
+from .work_actions import ACTION_SCHEMA
 
 
 SCHEMA = {'type': 'object', 'additionalProperties': False,
           'properties': {'status': {'type': 'string', 'enum': ['changed', 'unchanged', 'failed']},
                          'summary': {'type': 'string'}, 'technical': {'type': 'string'}},
           'required': ['status', 'summary', 'technical']}
+ANSWER_SCHEMA = json.loads(json.dumps(SCHEMA))
+ANSWER_SCHEMA['properties']['status']['enum'].append('data_action')
+ANSWER_SCHEMA['properties']['action'] = {'anyOf': [ACTION_SCHEMA, {'type': 'null'}]}
+ANSWER_SCHEMA['required'].append('action')
 PROTECTED = {'.git', '.env', 'auth.json', 'credentials.json', '.deploy-state.json'}
 ANSWER_PROMPT = '''Ты отвечаешь участнику группы о её настольном теннисе: игроках,
 результатах, Elo, встречах, правилах и работе бота. Сначала определи намерение.
@@ -41,6 +46,26 @@ summary кратко описывает задачу для следующего
 партиях с пересчётом рейтинга обоих после каждой; скажи, что других игр между
 ними нет. Можно объяснять сценарии и давать общие советы по тренировкам,
 отделяя их от выводов о конкретной игре: техника ударов из счёта неизвестна.
+Для исправления результата партии или отмены фото верни status data_action и
+объект action. Это план для доверенного контроллера, который проверит права,
+актуальность данных и сам применит изменение. Сам файлы/базу не меняй.
+photos содержит все фото, включая черновики, статус и партии с номерами number
+(нумерация с 1). latest_photo_id — последнее присланное фото, даже если черновик.
+games верхнего уровня — только подтверждённые партии. Не путай отсутствие
+партии в games с отсутствием её в photos. «В последней фотке» означает фото
+latest_photo_id; «последняя подтверждённая» — последнее со status confirmed.
+action.kind=edit_game: укажи photo_id, game_number и правильные score_a/score_b
+в порядке игроков a/b этой строки. Например Рома–Валя 8:11, но победил Рома,
+означает 11:8; чёрный цвет принадлежит Роме, красный Максиму, зелёный Илье,
+синий Вале. Уточнение цвета помогает определить победителя, не меняет цвет игрока.
+action.kind=cancel_photo: photo_id, остальные поля action=null; можно отменить
+черновик или исключить все партии подтверждённого фото с пересчётом истории.
+Нужна ровно одна однозначно определённая операция. При нескольких подходящих
+партиях, неизвестном счёте или неясном фото верни unchanged с вопросом для
+уточнения, action=null. Если правильный результат уже записан или фото уже
+отменено, ответь об этом с unchanged. Другие запросы также имеют action=null.
+Не выдавай план за выполненное действие: итог сформирует контроллер после записи.
+Исправление текущих результатов — data_action, не задача изменения кода.
 Не обращайся к Telegram/API/боевой базе/секретам, не читай другие личные файлы.
 Нельзя выполнять git push/deploy, писать в календарь или выдавать их за сделанные.
 Верни только JSON по схеме. summary — краткий итог по-русски, без описания
@@ -250,7 +275,7 @@ def unpack_archive(data, destination):
                 target.chmod(0o644)
 
 
-def read_report(path):
+def read_report(path, *, answer=False):
     # Agent files are untrusted, including symlinks/FIFOs pointing outside the job.
     try:
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
@@ -261,6 +286,18 @@ def read_report(path):
         if len(data) > 16384:
             raise ValueError()
         result = json.loads(data)
+        if answer and isinstance(result, dict) and ('action' in result or result.get('status') == 'data_action'):
+            from jsonschema import validate, ValidationError
+            try:
+                validate(result, ANSWER_SCHEMA)
+            except ValidationError:
+                raise ValueError() from None
+            if result['status'] == 'data_action':
+                if result['action'] is None:
+                    raise ValueError()
+                return result
+            if result.pop('action') is not None:
+                raise ValueError()
         if (set(result) != set(SCHEMA['required']) or
                 result['status'] not in ('changed', 'unchanged', 'failed') or
                 any(not isinstance(result[key], str) for key in result)):
@@ -345,12 +382,21 @@ def _run_work(request, job_id, config, progress, outcome):
     if config.get('model'):
         argv[6:6] = ['--model', str(config['model'])]
     answer_argv = list(argv)
+    answer_schema = home/'jobs'/f'{job_id}-answer-schema.json'
+    answer_schema.write_text(json.dumps(ANSWER_SCHEMA))
+    answer_schema.chmod(0o644)
+    answer_argv[answer_argv.index('--output-schema') + 1] = str(answer_schema)
     answer_argv[answer_argv.index('workspace-write')] = 'read-only'
     progress('Разбираю вопрос по актуальному снимку данных.')
     command(answer_argv, data=(ANSWER_PROMPT + '\nJSON-снимок: ' + str(context_path) +
-                               '\nЗапрос владельца:\n' + request).encode(), env=code_env,
+                               '\nЗапрос участника:\n' + request).encode(), env=code_env,
             timeout=int(config.get('code_timeout', 1800)), codex=True)
-    answer = read_report(report)
+    answer = read_report(report, answer=True)
+    if answer['status'] == 'data_action':
+        if config.get('actor_id') != OWNER_ID:
+            raise WorkError('Исправлять партии и отменять фото может только Илья.')
+        outcome.update(answer)
+        return outcome
     if answer['status'] != 'changed':
         outcome.update(answer)
         if answer['status'] == 'unchanged':

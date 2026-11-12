@@ -47,6 +47,8 @@ def stats_button(store):
 
 def draft_footer(store, pid):
     photo = store.photo(pid)
+    if photo['status'] == 'cancelled':
+        return 'Фотография отменена. Партии не учитываются.', stats_button(store)
     games = json.loads(photo['proposal'])
     votes = store.vote_count(pid)
     buttons = [[{'text': f'Подтвердить · {votes}/2',
@@ -139,6 +141,9 @@ def draft(store, pid):
 
 
 def draft_pages(store, pid):
+    if store.photo(pid)['status'] == 'cancelled':
+        text, keyboard = draft_footer(store, pid)
+        return [text], keyboard
     # Boundaries depend on names/scores and maximum delta width, never on votes
     # or the current rating. Never split a game line or its HTML tags.
     lines = game_lines(store, pid)
@@ -170,7 +175,9 @@ def queue_draft(store, pid, key):
 
 def card_update(store, card):
     photo = store.photo(card['photo_id'])
-    if photo['revision'] != card['revision']:
+    if photo['status'] == 'cancelled':
+        text, keyboard = draft_footer(store, card['photo_id'])
+    elif photo['revision'] != card['revision']:
         text, keyboard = 'Список обновлён. Подтверди последний ответ бота.', stats_button(store)
     else:
         pages, keyboard = draft_pages(store, card['photo_id'])

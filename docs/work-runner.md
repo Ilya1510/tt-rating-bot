@@ -11,6 +11,27 @@ pushing or deploying. The snapshot excludes Telegram IDs, raw photos, chat text,
 credentials and configuration secrets. Progress stays in the journal; Telegram
 receives only a final result.
 
+The owner can also correct scores and cancel draft or confirmed photos through
+natural-language `/work` requests, for example:
+
+- `/work В последнем фото Рома — Валя 8:11, но победил Рома, исправь на 11:8`
+- `/work Отмени последнюю фотографию`
+
+The snapshot includes photo IDs, draft rows, game numbers and current statuses.
+Ambiguous requests produce a clarification. The read-only model returns a typed
+`edit_game` or `cancel_photo` plan; it never gets database write access. The
+controller independently checks the owner, chat and photo snapshot token before
+applying it. A concurrent edit or confirmation rejects a stale plan. Mutation,
+audit, card refresh queue and final operation result commit atomically; replaying
+the operation cannot apply it twice. Data actions do not edit or deploy code.
+
+Editing a draft clears votes and refreshes its confirmation buttons. Editing a
+confirmed game updates its displayed score and recalculates subsequent Elo.
+Cancellation retains photo/game records for audit, marks games inactive and
+removes confirmation buttons. The Google backup retains cancelled game IDs with
+the cancelled label. Changed ratings refresh existing photo cards; new `/graph`
+and `/stat` requests use the recalculated history.
+
 The owner may change all project code, including access policy, work_runner,
 maintenance, release, instructions, tests, dependencies and deployment files.
 The prior policy describes current behavior and does not overrule a new explicit

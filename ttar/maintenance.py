@@ -225,6 +225,10 @@ def work_loop(config):
                     LOG.info('Work %s: %s', op['id'], message)
                 work_config = dict(config['work'], actor_id=op['actor'], tennis_context=tennis_snapshot(store, op['chat_id']))
                 result = run_work(json.loads(op['request'])['text'], op['id'], work_config, progress)
+                if result['status'] == 'data_action':
+                    from .work_actions import complete_data_action
+                    complete_data_action(store, op, result, work_config['tennis_context'], config['allowed_chat_id'])
+                    continue
                 text = f"/work #{op['id']}: " + result['summary']
                 if result['status'] == 'done' and result.get('commit'):
                     text += '\nИзменения применены, проверки пройдены.'

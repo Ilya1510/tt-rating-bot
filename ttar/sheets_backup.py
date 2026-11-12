@@ -41,7 +41,7 @@ def snapshot(database, chat_id):
         for g in db.execute('''SELECT g.*,p.message_id,pa.name AS name_a,pb.name AS name_b
             FROM games g JOIN photos p ON p.id=g.photo_id
             JOIN players pa ON pa.id=g.a JOIN players pb ON pb.id=g.b
-            WHERE p.chat_id=? AND p.status='confirmed'
+            WHERE p.chat_id=? AND p.status IN ('confirmed','cancelled')
             ORDER BY g.occurred_at,p.message_id,g.ordinal,g.id''', (chat_id,)):
             local = datetime.fromtimestamp(g['occurred_at'], ZoneInfo('Europe/Moscow'))
             serial = (local.replace(tzinfo=None) - datetime(1899, 12, 30)).total_seconds() / 86400

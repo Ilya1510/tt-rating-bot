@@ -221,8 +221,9 @@ def test_feedback_retains_collection_errors_but_masks_secrets():
     assert 'ERROR tests/test_score.py' in feedback and 'secret-value' not in feedback
 
 
-@pytest.mark.parametrize('decision,status', [('unchanged', 'answered'), ('changed', 'failed')])
-def test_nonowner_never_enters_writable_stage_even_if_model_requests_change(tmp_path, monkeypatch, decision, status):
+@pytest.mark.parametrize('decision,status,actor', [('unchanged', 'answered', 42), ('changed', 'failed', 42),
+    ('data_action', 'failed', 42), ('data_action', 'data_action', work.OWNER_ID)])
+def test_answer_actions_never_enter_code_edit_or_deploy_stage(tmp_path, monkeypatch, decision, status, actor):
     release, home = tmp_path/'release', tmp_path/'code'
     release.mkdir(); home.mkdir()
     repo = release/'repo'
@@ -238,8 +239,11 @@ def test_nonowner_never_enters_writable_stage_even_if_model_requests_change(tmp_
             assert json.loads(context.read_text()) == {'players': [{'name': 'Илья', 'elo': 950}]}
             assert context.stat().st_mode & 0o222 == 0
             assert not (home/'jobs'/'31'/'tennis.json').exists()
-            Path(argv[argv.index('-o') + 1]).write_text(json.dumps(
-                {'status': decision, 'summary': 'Илье нужны 2 победы подряд.', 'technical': 'computed'}))
+            report = {'status': decision, 'summary': 'Илье нужны 2 победы подряд.', 'technical': 'computed'}
+            if decision == 'data_action':
+                report['action'] = {'kind': 'cancel_photo', 'photo_id': 1,
+                                    'game_number': None, 'score_a': None, 'score_b': None}
+            Path(argv[argv.index('-o') + 1]).write_text(json.dumps(report))
             return b''
         assert argv[0] not in ('systemd-run', '/trusted/deploy')
         return real_command(argv, **kwargs)
@@ -254,11 +258,15 @@ def test_nonowner_never_enters_writable_stage_even_if_model_requests_change(tmp_
     monkeypatch.setattr(os, 'chown', lambda *a: None)
     result = work.run_work('Сколько нужно побед?', 31,
         {'release_root': str(release), 'code_home': str(home), 'deploy_command': ['/trusted/deploy'],
-         'actor_id': 42, 'tennis_context': {'players': [{'name': 'Илья', 'elo': 950}]}}, lambda _: None)
+         'actor_id': actor, 'tennis_context': {'players': [{'name': 'Илья', 'elo': 950}]}}, lambda _: None)
     assert calls == ['answer']
     assert result['status'] == status and result['commit'] is None
     if decision == 'changed':
         assert 'только Илья' in result['summary']
+    if decision == 'data_action' and actor != work.OWNER_ID:
+        assert 'только Илья' in result['summary']
+    if status == 'data_action':
+        assert result['action']['kind'] == 'cancel_photo'
     assert not (release/'candidates'/'31').exists()
 
 
