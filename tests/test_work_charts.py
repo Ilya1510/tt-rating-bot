@@ -73,6 +73,9 @@ def test_filters_wins_and_win_rate(store):
     request['player_ids'] = [999]
     with pytest.raises(ValueError, match='игроков'):
         chart_data(ctx, request)
+    request['player_ids'] = [1, 1]
+    with pytest.raises(ValueError, match='игроков'):
+        chart_data(ctx, request)
 
 
 def test_all_metrics_render_real_png_including_single_point(store):

@@ -17,7 +17,7 @@ CHART_SCHEMA = {'type': 'object', 'additionalProperties': False,
         'period': {'type': 'string', 'enum': ['all', 'today', 'last_photo']},
         'x_axis': {'type': 'string', 'enum': ['date', 'game']},
         'player_ids': {'type': 'array', 'items': {'type': 'integer', 'minimum': 1},
-                       'maxItems': 4, 'uniqueItems': True}},
+                       'maxItems': 4}},
     'required': ['metric', 'period', 'x_axis', 'player_ids']}
 
 TITLES = {'elo': 'Рейтинг Elo', 'mean_elo': 'Накопленное среднее Elo каждого игрока',
@@ -35,7 +35,7 @@ def chart_data(snapshot, spec):
     validate(spec, CHART_SCHEMA)
     known = {p['id']: p for p in snapshot['players']}
     ids = spec['player_ids'] or list(known)
-    if not ids or len(ids) > 4 or any(pid not in known for pid in ids):
+    if not ids or len(ids) > 4 or len(set(ids)) != len(ids) or any(pid not in known for pid in ids):
         raise ValueError('Не нашёл выбранных игроков в нашей истории.')
     games = snapshot['games']
     if not games:
