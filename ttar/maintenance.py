@@ -225,6 +225,13 @@ def work_loop(config):
                     LOG.info('Work %s: %s', op['id'], message)
                 work_config = dict(config['work'], actor_id=op['actor'], tennis_context=tennis_snapshot(store, op['chat_id']))
                 result = run_work(json.loads(op['request'])['text'], op['id'], work_config, progress)
+                if result['status'] == 'chart':
+                    from .work_charts import complete_chart
+                    try:
+                        complete_chart(store, op, result, work_config['tennis_context'], config['allowed_chat_id'])
+                    except ValueError as error:
+                        finish(store, op, 'failed', f"/work #{op['id']}: {error}")
+                    continue
                 if result['status'] == 'data_action':
                     from .work_actions import complete_data_action
                     complete_data_action(store, op, result, work_config['tennis_context'], config['allowed_chat_id'])

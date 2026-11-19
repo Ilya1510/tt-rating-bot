@@ -11,6 +11,22 @@ pushing or deploying. The snapshot excludes Telegram IDs, raw photos, chat text,
 credentials and configuration secrets. Progress stays in the journal; Telegram
 receives only a final result.
 
+Requests for graphs return a PNG photo with a short caption, available to every
+group member. The read-only model returns a typed `chart` plan (metric, period,
+axis and player IDs); the controller calculates the series from the same trusted
+snapshot and queues `sendPhoto`. It never accepts image paths, URLs, arbitrary
+code or model-invented series. The image and final operation state share one
+transaction/outbox key, with no extra text-only success message or code deploy.
+
+Supported metrics are Elo, cumulative mean Elo per player, mean Elo after personal
+games within each day, cumulative wins and personal win percentage. Cumulative
+mean follows `/stat`: ratings after every common game, excluding the initial
+zero point. A date axis uses end-of-day cumulative values. Day means omit days
+without personal games. Periods are all history, today in Moscow and the latest
+confirmed photo; filtering the displayed period does not reset cumulative totals.
+For example, `/work Нарисуй график среднего эло за всё время у каждого игрока`
+returns the cumulative means as one PNG, using each player's configured color.
+
 The owner can also correct scores and cancel draft or confirmed photos through
 natural-language `/work` requests, for example:
 

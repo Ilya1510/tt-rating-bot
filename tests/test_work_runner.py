@@ -222,7 +222,7 @@ def test_feedback_retains_collection_errors_but_masks_secrets():
 
 
 @pytest.mark.parametrize('decision,status,actor', [('unchanged', 'answered', 42), ('changed', 'failed', 42),
-    ('data_action', 'failed', 42), ('data_action', 'data_action', work.OWNER_ID)])
+    ('data_action', 'failed', 42), ('data_action', 'data_action', work.OWNER_ID), ('chart', 'chart', 42)])
 def test_answer_actions_never_enter_code_edit_or_deploy_stage(tmp_path, monkeypatch, decision, status, actor):
     release, home = tmp_path/'release', tmp_path/'code'
     release.mkdir(); home.mkdir()
@@ -243,6 +243,9 @@ def test_answer_actions_never_enter_code_edit_or_deploy_stage(tmp_path, monkeypa
             if decision == 'data_action':
                 report['action'] = {'kind': 'cancel_photo', 'photo_id': 1,
                                     'game_number': None, 'score_a': None, 'score_b': None}
+            if decision == 'chart':
+                report.update(action=None, chart={'metric': 'mean_elo', 'period': 'all',
+                                                  'x_axis': 'date', 'player_ids': []})
             Path(argv[argv.index('-o') + 1]).write_text(json.dumps(report))
             return b''
         assert argv[0] not in ('systemd-run', '/trusted/deploy')
