@@ -98,6 +98,25 @@ def test_lost_create_response_never_creates_again_even_after_not_found(store):
     assert store.db.execute('SELECT create_attempted FROM bookings').fetchone()[0] == 1
 
 
+def test_exhausted_preflight_sends_one_failure_without_reconciliation(store, monkeypatch):
+    from ttar.calendar_api import CalendarClient, CalendarError
+
+    calls = []
+    monkeypatch.setattr('ttar.calendar_api.time.sleep', lambda _: None)
+
+    def transport(method, path, body, query):
+        calls.append((method, path))
+        raise CalendarError()
+
+    client = CalendarClient(transport=transport)
+    run_booking(store, client, operation(store))
+    check_pending(store, client, -123)
+    assert calls == [('GET', '/events')] * 3
+    assert tuple(store.db.execute('SELECT status,create_attempted,next_check FROM bookings').fetchone()) == (
+        'precheck_failed', 0, None)
+    assert store.db.execute('SELECT count(*) FROM outbox').fetchone()[0] == 1
+
+
 def test_id_committed_before_verification_and_manual_auto_no_duplicate(store):
     class Client:
         created = 0

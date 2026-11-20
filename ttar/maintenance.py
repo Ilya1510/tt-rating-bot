@@ -73,6 +73,8 @@ def booking_text(row, result):
     cancelling = row['pending_action'] == 'cancel'
     if status == 'conflict' and not cancelling:
         return f'Зал уже занят на {slot}. Забронировать не получилось.'
+    if status == 'precheck_failed':
+        return f'Не удалось проверить календарь для брони на {slot}. Встреча не создана.\n{result.reason}'
     if (status == 'uncertain' and not result.event_id and not cancelling
             and result.reason == 'Календарь: ошибка HTTP 500.'):
         # This API also returns 500 when a room is occupied, while free-busy
@@ -165,7 +167,7 @@ def run_booking(store, client, op):
                 with store.transaction():
                     store.db.execute('UPDATE bookings SET event_id=? WHERE id=?', (event_id, row['id']))
             result = client.create_booking(start, end, key, saved)
-            if result.status in ('conflict', 'rejected', 'unverifiable') and not result.event_id:
+            if result.status in ('conflict', 'rejected', 'precheck_failed', 'unverifiable') and not result.event_id:
                 with store.transaction():
                     store.db.execute('UPDATE bookings SET create_attempted=0 WHERE id=?', (row['id'],))
     save_booking_result(store, row, result)

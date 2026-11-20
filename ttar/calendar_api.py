@@ -8,8 +8,10 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 import hashlib
 import json
+import logging
 import os
 import re
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -20,6 +22,8 @@ ROOM = 'conf_mm_5_15@yandex-team.ru'
 TIMEZONE = 'Europe/Moscow'
 SUMMARY = 'Настольный теннис'
 PLAYERS = ('klim-roma@yandex-team.ru', 'polyanskiy-mn@yandex-team.ru')
+PREFLIGHT_RETRY_DELAYS = (2, 5)
+LOG = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -202,6 +206,26 @@ class CalendarClient:
         except CalendarError as error:
             return BookingResult('unverifiable', reason=str(error))
 
+    def _booking_preflight(self, start, end, booking_key):
+        for delay in (*PREFLIGHT_RETRY_DELAYS, None):
+            stage = 'list_events'
+            try:
+                existing = self._find_existing(start, end, booking_key)
+                if existing:
+                    return existing, False
+                stage = 'free_busy'
+                busy = self.free_busy(ROOM, start, end)
+                conflict = any(_date(interval['start']) < _date(end) and
+                               _date(interval['end']) > _date(start) for interval in busy)
+                return None, conflict
+            except CalendarError as error:
+                LOG.warning('Calendar booking preflight failed: stage=%s HTTP_status=%s',
+                            stage, error.status or 'none')
+                transient = error.status in (0, 408) or 500 <= error.status < 600
+                if delay is None or not transient:
+                    raise
+                time.sleep(delay)
+
     def create_booking(self, start, end, booking_key, save_event):
         """Create once; save_event(event_id) MUST commit before returning.
 
@@ -210,15 +234,14 @@ class CalendarClient:
         """
         _slot(start, end)
         try:
-            old = self._find_existing(start, end, booking_key)
-            if old:
-                save_event(old['event_id'])
-                return self.verify_booking(old['event_id'], start, end)
-            for interval in self.free_busy(ROOM, start, end):
-                if _date(interval['start']) < _date(end) and _date(interval['end']) > _date(start):
-                    return BookingResult('conflict', reason='Зал уже занят в это время.')
+            old, conflict = self._booking_preflight(start, end, booking_key)
         except CalendarError as error:
-            return BookingResult('unverifiable', reason=str(error))
+            return BookingResult('precheck_failed', reason=str(error))
+        if old:
+            save_event(old['event_id'])
+            return self.verify_booking(old['event_id'], start, end)
+        if conflict:
+            return BookingResult('conflict', reason='Зал уже занят в это время.')
         body = {'summary': SUMMARY, 'start': _edt(start), 'end': _edt(end),
                 'description': '', 'location': ROOM,
                 'participants': [{'email': ROOM, 'participation_type': 'ATTENDEE'}],

@@ -91,6 +91,39 @@ def test_timeout_without_id_does_not_claim_same_slot_event_or_duplicate():
     assert sum(c[:2] == ('POST', '/events') for c in api.calls) == 1
 
 
+def test_booking_recovers_from_timeouts_in_both_preflight_steps(monkeypatch):
+    api, delays, saved = API(), [], []
+    monkeypatch.setattr('ttar.calendar_api.time.sleep', delays.append)
+    failures = iter([('GET', '/events'), ('POST', '/free-busy/users/search'), None])
+    fail_at = next(failures)
+
+    def transport(method, path, body, query):
+        nonlocal fail_at
+        if (method, path) == fail_at:
+            fail_at = next(failures)
+            raise CalendarError()
+        return api(method, path, body, query)
+
+    result = CalendarClient(transport=transport).create_booking(START, END, KEY, saved.append)
+    assert result.status == 'accepted' and saved == [ID]
+    assert delays == [2, 5]
+    assert sum(call[:2] == ('POST', '/events') for call in api.calls) == 1
+
+
+@pytest.mark.parametrize('status,attempts', [(0, 3), (503, 3), (401, 1)])
+def test_preflight_stops_after_retry_limit_or_permanent_error(monkeypatch, status, attempts):
+    calls = []
+    monkeypatch.setattr('ttar.calendar_api.time.sleep', lambda _: None)
+
+    def transport(method, path, body, query):
+        calls.append((method, path))
+        raise CalendarError(status)
+
+    result = CalendarClient(transport=transport).create_booking(START, END, KEY, lambda _: pytest.fail('no creation'))
+    assert result.status == 'precheck_failed'
+    assert calls == [('GET', '/events')] * attempts
+
+
 def test_existing_attempt_reuses_event_and_persists_id():
     api, saved = API(True), []
     assert CalendarClient(transport=api).create_booking(START, END, KEY, saved.append).status == 'accepted'
